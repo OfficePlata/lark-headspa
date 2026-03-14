@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useSearch } from "wouter";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import { CheckCircle, Loader2, AlertCircle, ChevronDown, Check } from "lucide-react";
+import { CheckCircle, Loader2, AlertCircle, ChevronDown, Check, Camera, X, Search } from "lucide-react";
 import { api } from "@/lib/api";
 
 interface FormField {
@@ -29,6 +29,20 @@ interface FormConfig {
   fields: FormField[];
 }
 
+interface CustomerOption {
+  recordId: string;
+  customerNo: string;
+  name: string;
+}
+
+interface PhotoFile {
+  file: File;
+  preview: string;
+  uploading: boolean;
+  token?: string;
+  error?: string;
+}
+
 type FormType = "customer" | "monthly_goal" | "yearly_goal" | "karte";
 
 const FORM_TYPE_LABELS: Record<FormType, string> = {
@@ -38,6 +52,292 @@ const FORM_TYPE_LABELS: Record<FormType, string> = {
   karte: "カルテデータ",
 };
 
+// ============================================================
+// Customer Lookup Component
+// ============================================================
+function CustomerLookupField({
+  value,
+  onChange,
+  slug,
+  colors,
+  borderRadius,
+  placeholder,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+  slug: string;
+  colors: Record<string, string>;
+  borderRadius: string;
+  placeholder: string;
+}) {
+  const [customers, setCustomers] = useState<CustomerOption[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      try {
+        const data = await api.customers.list(slug);
+        setCustomers(data.customers || []);
+        if (data.error) setLoadError(data.error);
+      } catch (err: any) {
+        setLoadError(err.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [slug]);
+
+  // Close on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const filtered = customers.filter((c) => {
+    const q = search.toLowerCase();
+    return (
+      c.customerNo.toLowerCase().includes(q) ||
+      c.name.toLowerCase().includes(q)
+    );
+  });
+
+  const selectedCustomer = customers.find((c) => c.customerNo === value);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="w-full px-4 py-3 text-left flex items-center justify-between transition-colors"
+        style={{
+          background: colors.inputBg,
+          border: `1px solid ${open ? colors.inputFocus : colors.inputBorder}`,
+          borderRadius,
+          color: value ? colors.text : colors.textMuted,
+        }}
+      >
+        <span className="truncate">
+          {selectedCustomer
+            ? `${selectedCustomer.customerNo} - ${selectedCustomer.name}`
+            : placeholder || "顧客を選択"}
+        </span>
+        {loading ? (
+          <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: colors.textMuted }} />
+        ) : (
+          <ChevronDown
+            className="w-4 h-4 flex-shrink-0 transition-transform"
+            style={{ color: colors.textMuted, transform: open ? "rotate(180deg)" : "" }}
+          />
+        )}
+      </button>
+
+      {open && (
+        <div
+          className="absolute z-50 w-full mt-1 overflow-hidden"
+          style={{
+            background: colors.surface,
+            border: `1px solid ${colors.border}`,
+            borderRadius,
+            boxShadow: "0 8px 24px rgba(0,0,0,0.12)",
+            maxHeight: "300px",
+          }}
+        >
+          {/* Search input */}
+          <div className="p-2 border-b" style={{ borderColor: colors.border }}>
+            <div className="relative">
+              <Search
+                className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4"
+                style={{ color: colors.textMuted }}
+              />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="番号・名前で検索..."
+                className="w-full pl-9 pr-3 py-2 text-sm focus:outline-none"
+                style={{
+                  background: colors.inputBg,
+                  border: `1px solid ${colors.inputBorder}`,
+                  borderRadius,
+                  color: colors.text,
+                }}
+                autoFocus
+              />
+            </div>
+          </div>
+
+          {/* Options list */}
+          <div className="overflow-y-auto" style={{ maxHeight: "230px" }}>
+            {loadError && (
+              <div className="px-4 py-3 text-xs" style={{ color: colors.error }}>
+                取得エラー: {loadError}
+              </div>
+            )}
+            {loading ? (
+              <div className="flex items-center justify-center py-6">
+                <Loader2 className="w-5 h-5 animate-spin" style={{ color: colors.primary }} />
+              </div>
+            ) : filtered.length === 0 ? (
+              <div className="px-4 py-6 text-center text-sm" style={{ color: colors.textMuted }}>
+                {customers.length === 0 ? "顧客データがありません" : "該当する顧客が見つかりません"}
+              </div>
+            ) : (
+              filtered.map((c) => (
+                <button
+                  key={c.recordId}
+                  type="button"
+                  onClick={() => {
+                    onChange(c.customerNo);
+                    setOpen(false);
+                    setSearch("");
+                  }}
+                  className="w-full px-4 py-3 text-left flex items-center justify-between transition-colors text-sm"
+                  style={{
+                    background: value === c.customerNo ? `${colors.primary}10` : "transparent",
+                    color: colors.text,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (value !== c.customerNo) e.currentTarget.style.background = colors.surfaceHover || `${colors.primary}05`;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = value === c.customerNo ? `${colors.primary}10` : "transparent";
+                  }}
+                >
+                  <div>
+                    <span className="font-medium" style={{ color: colors.primary }}>{c.customerNo}</span>
+                    <span className="mx-2" style={{ color: colors.border }}>|</span>
+                    <span>{c.name}</span>
+                  </div>
+                  {value === c.customerNo && (
+                    <Check className="w-4 h-4 flex-shrink-0" style={{ color: colors.primary }} />
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Photo Upload Component
+// ============================================================
+function PhotoUploadField({
+  photos,
+  onAdd,
+  onRemove,
+  colors,
+  borderRadius,
+  slug,
+}: {
+  photos: PhotoFile[];
+  onAdd: (files: FileList) => void;
+  onRemove: (index: number) => void;
+  colors: Record<string, string>;
+  borderRadius: string;
+  slug: string;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  return (
+    <div>
+      {/* Photo previews */}
+      {photos.length > 0 && (
+        <div className="flex flex-wrap gap-3 mb-3">
+          {photos.map((photo, idx) => (
+            <div
+              key={idx}
+              className="relative w-24 h-24 overflow-hidden"
+              style={{ borderRadius, border: `1px solid ${colors.border}` }}
+            >
+              <img
+                src={photo.preview}
+                alt={`写真 ${idx + 1}`}
+                className="w-full h-full object-cover"
+              />
+              {photo.uploading && (
+                <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                  <Loader2 className="w-5 h-5 animate-spin text-white" />
+                </div>
+              )}
+              {photo.error && (
+                <div className="absolute inset-0 bg-red-500/40 flex items-center justify-center">
+                  <AlertCircle className="w-5 h-5 text-white" />
+                </div>
+              )}
+              {photo.token && (
+                <div className="absolute top-1 left-1">
+                  <CheckCircle className="w-4 h-4" style={{ color: colors.success }} />
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => onRemove(idx)}
+                className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 flex items-center justify-center"
+              >
+                <X className="w-3 h-3 text-white" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add photo button */}
+      <button
+        type="button"
+        onClick={() => fileInputRef.current?.click()}
+        className="flex items-center gap-3 w-full px-4 py-4 transition-all"
+        style={{
+          background: colors.inputBg,
+          border: `2px dashed ${colors.inputBorder}`,
+          borderRadius,
+          color: colors.textMuted,
+        }}
+      >
+        <Camera className="w-5 h-5" />
+        <span className="text-sm">
+          {photos.length === 0 ? "写真を選択またはカメラで撮影" : "写真を追加"}
+        </span>
+      </button>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        capture="environment"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files && e.target.files.length > 0) {
+            onAdd(e.target.files);
+          }
+          // Reset so the same file can be selected again
+          e.target.value = "";
+        }}
+      />
+
+      <p className="text-xs mt-1" style={{ color: colors.textMuted }}>
+        JPEG, PNG, GIF, WebP対応（各10MBまで）
+      </p>
+    </div>
+  );
+}
+
+// ============================================================
+// Main PublicForm Component
+// ============================================================
 export default function PublicForm() {
   const params = useParams<{ slug: string }>();
   const searchString = useSearch();
@@ -50,8 +350,8 @@ export default function PublicForm() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  // formData can hold string or string[] for multiselect fields
   const [formData, setFormData] = useState<Record<string, string | string[]>>({});
+  const [photos, setPhotos] = useState<PhotoFile[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const loadForm = useCallback(async (type: FormType) => {
@@ -61,12 +361,18 @@ export default function PublicForm() {
       const data = await api.form.getBySlug(slug, type);
       if (data) {
         setConfig(data);
-        // Initialize form data
         const initial: Record<string, string | string[]> = {};
         data.fields.forEach((f) => {
-          initial[f.fieldName] = f.fieldType === "multiselect" ? [] : "";
+          if (f.fieldType === "multiselect") {
+            initial[f.fieldName] = [];
+          } else if (f.fieldType === "photo") {
+            // Photos are handled separately
+          } else {
+            initial[f.fieldName] = "";
+          }
         });
         setFormData(initial);
+        setPhotos([]);
       } else {
         setError("フォームが見つかりません");
       }
@@ -95,13 +401,67 @@ export default function PublicForm() {
     });
   };
 
+  const handleAddPhotos = async (files: FileList) => {
+    const newPhotos: PhotoFile[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const preview = URL.createObjectURL(file);
+      newPhotos.push({ file, preview, uploading: true });
+    }
+
+    const startIdx = photos.length;
+    setPhotos((prev) => [...prev, ...newPhotos]);
+
+    // Upload each photo
+    for (let i = 0; i < newPhotos.length; i++) {
+      try {
+        const result = await api.photos.upload(slug, newPhotos[i].file);
+        setPhotos((prev) => {
+          const updated = [...prev];
+          const idx = startIdx + i;
+          if (updated[idx]) {
+            updated[idx] = { ...updated[idx], uploading: false, token: result.fileToken };
+          }
+          return updated;
+        });
+      } catch (err: any) {
+        setPhotos((prev) => {
+          const updated = [...prev];
+          const idx = startIdx + i;
+          if (updated[idx]) {
+            updated[idx] = { ...updated[idx], uploading: false, error: err.message };
+          }
+          return updated;
+        });
+        toast.error(`写真のアップロードに失敗: ${err.message}`);
+      }
+    }
+  };
+
+  const handleRemovePhoto = (index: number) => {
+    setPhotos((prev) => {
+      const updated = [...prev];
+      // Revoke the object URL to free memory
+      URL.revokeObjectURL(updated[index].preview);
+      updated.splice(index, 1);
+      return updated;
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!config) return;
 
+    // Check if any photos are still uploading
+    if (photos.some((p) => p.uploading)) {
+      toast.error("写真のアップロード中です。完了後に送信してください。");
+      return;
+    }
+
     // Validate required fields
     const missing = config.fields.filter((f) => {
       if (!f.isRequired) return false;
+      if (f.fieldType === "photo") return false; // photos validated separately if needed
       const val = formData[f.fieldName];
       if (Array.isArray(val)) return val.length === 0;
       return !val?.toString().trim();
@@ -113,7 +473,12 @@ export default function PublicForm() {
 
     setSubmitting(true);
     try {
-      const result = await api.form.submit(slug, formType, formData);
+      // Collect photo tokens
+      const photoTokens = photos
+        .filter((p) => p.token)
+        .map((p) => p.token!);
+
+      const result = await api.form.submit(slug, formType, formData, photoTokens.length > 0 ? photoTokens : undefined);
       if (result.success) {
         setSubmitted(true);
         if (result.larkSynced) {
@@ -134,10 +499,17 @@ export default function PublicForm() {
 
   const handleReset = () => {
     setSubmitted(false);
+    setPhotos([]);
     if (config) {
       const initial: Record<string, string | string[]> = {};
       config.fields.forEach((f) => {
-        initial[f.fieldName] = f.fieldType === "multiselect" ? [] : "";
+        if (f.fieldType === "multiselect") {
+          initial[f.fieldName] = [];
+        } else if (f.fieldType === "photo") {
+          // skip
+        } else {
+          initial[f.fieldName] = "";
+        }
       });
       setFormData(initial);
     }
@@ -257,7 +629,27 @@ export default function PublicForm() {
                     {field.fieldLabel}
                   </label>
 
-                  {field.fieldType === "select" && field.options ? (
+                  {/* Customer Lookup Field */}
+                  {field.fieldType === "customer_lookup" ? (
+                    <CustomerLookupField
+                      value={(formData[field.fieldName] as string) || ""}
+                      onChange={(val) => setFormData((prev) => ({ ...prev, [field.fieldName]: val }))}
+                      slug={slug}
+                      colors={c}
+                      borderRadius={theme.borderRadius}
+                      placeholder={field.placeholder || "顧客を選択"}
+                    />
+                  ) : field.fieldType === "photo" ? (
+                    /* Photo Upload Field */
+                    <PhotoUploadField
+                      photos={photos}
+                      onAdd={handleAddPhotos}
+                      onRemove={handleRemovePhoto}
+                      colors={c}
+                      borderRadius={theme.borderRadius}
+                      slug={slug}
+                    />
+                  ) : field.fieldType === "select" && field.options ? (
                     <div className="relative">
                       <select
                         value={(formData[field.fieldName] as string) || ""}
