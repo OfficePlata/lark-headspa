@@ -234,6 +234,7 @@ export const DEFAULT_FORM_CONFIGS = {
   karte: {
     title: "カルテデータ入力フォーム",
     fields: [
+      { fieldName: "顧客No", fieldLabel: "顧客No.（顧客を選択）", fieldType: "customer_lookup", placeholder: "顧客を検索・選択", isRequired: true, larkFieldName: "顧客No", larkFieldType: "Text" },
       { fieldName: "顧客区分", fieldLabel: "顧客区分", fieldType: "select", options: ["新規", "既存"], placeholder: "オプションを選択", isRequired: true, larkFieldName: "顧客区分", larkFieldType: "SingleSelect" },
       { fieldName: "来店日", fieldLabel: "来店日", fieldType: "date", placeholder: "年/月/日", isRequired: true, larkFieldName: "来店日", larkFieldType: "DateTime" },
       { fieldName: "施術コース", fieldLabel: "施術コース", fieldType: "multiselect", options: ["ヘッドスパ60分", "ヘッドスパ90分", "ヘッドスパ120分", "カット", "カラー", "トリートメント"], placeholder: "該当するものを選択", isRequired: true, larkFieldName: "施術コース", larkFieldType: "MultiSelect" },
@@ -241,6 +242,7 @@ export const DEFAULT_FORM_CONFIGS = {
       { fieldName: "施術：支払金額", fieldLabel: "施術：支払金額（円）", fieldType: "number", placeholder: "5000", isRequired: true, larkFieldName: "施術：支払金額", larkFieldType: "Currency" },
       { fieldName: "物販：支払金額", fieldLabel: "物販：支払金額（円）", fieldType: "number", placeholder: "1000", isRequired: false, larkFieldName: "物販：支払金額", larkFieldType: "Currency" },
       { fieldName: "支払方法", fieldLabel: "支払方法", fieldType: "multiselect", options: ["現金", "クレジット", "電子マネー", "QRコード決済"], placeholder: "該当するものを選択", isRequired: true, larkFieldName: "支払方法", larkFieldType: "MultiSelect" },
+      { fieldName: "写真", fieldLabel: "写真添付（施術前後など）", fieldType: "photo", placeholder: "写真を選択", isRequired: false, larkFieldName: "写真", larkFieldType: "Attachment" },
     ],
   },
 };
@@ -254,7 +256,7 @@ export const FORM_TYPES = Object.keys(DEFAULT_FORM_CONFIGS) as FormType[];
  */
 export const LARK_READONLY_FIELDS: Record<string, string[]> = {
   customer: ["顧客No", "氏名", "年齢", "来店年月", "カルテデータ"],
-  karte: ["カルテID", "顧客No", "氏名", "性別", "来店年月", "総支払額"],
+  karte: ["カルテID", "氏名", "性別", "来店年月", "総支払額"],
   monthly_goal: ["月間売上目標目安", "売上（日）", "客数（日）"],
   yearly_goal: ["月間売上目標", "年間来店数目標（人）"],
 };
