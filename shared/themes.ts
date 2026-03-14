@@ -194,57 +194,67 @@ export function getTheme(themeId: string): ThemeConfig {
 
 /**
  * Default form field configurations for each form type
+ * fieldName: フォーム内部で使用するフィールド名
+ * larkFieldName: Lark Bitableのフィールド名（異なる場合のみ指定）
+ * larkFieldType: Lark側のフィールドタイプ（マッピング用）
+ * skipLarkSync: trueの場合、Lark同期時にスキップ（AutoNumber, Formula等）
  */
 export const DEFAULT_FORM_CONFIGS = {
   customer: {
     title: "新規顧客情報入力フォーム",
     fields: [
-      { fieldName: "日付", fieldLabel: "日付", fieldType: "date", placeholder: "年/月/日", isRequired: true },
-      { fieldName: "姓", fieldLabel: "姓", fieldType: "text", placeholder: "内容を入力", isRequired: true },
-      { fieldName: "名", fieldLabel: "名", fieldType: "text", placeholder: "内容を入力", isRequired: true },
-      { fieldName: "フリガナ", fieldLabel: "フリガナ", fieldType: "text", placeholder: "※姓・名は空白を（例）ヤマダ タロウ", isRequired: true },
-      { fieldName: "性別", fieldLabel: "性別", fieldType: "select", options: ["男性", "女性", "その他"], placeholder: "オプションを選択", isRequired: true },
-      { fieldName: "電話番号", fieldLabel: "電話番号（ハイフンなし）", fieldType: "text", placeholder: "09012345678", isRequired: true },
-      { fieldName: "生年月日", fieldLabel: "生年月日（例：1990年1月1日）", fieldType: "date", placeholder: "年/月/日", isRequired: true },
-      { fieldName: "来店経緯", fieldLabel: "どのようにして、当店をお知りになりましたか？", fieldType: "select", options: ["インターネット検索", "SNS", "友人・知人の紹介", "チラシ・広告", "通りがかり", "その他"], placeholder: "オプションを選択", isRequired: true },
+      { fieldName: "来店日", fieldLabel: "来店日", fieldType: "date", placeholder: "年/月/日", isRequired: true, larkFieldName: "来店日", larkFieldType: "DateTime" },
+      { fieldName: "姓", fieldLabel: "姓", fieldType: "text", placeholder: "内容を入力", isRequired: true, larkFieldName: "姓", larkFieldType: "Text" },
+      { fieldName: "名前", fieldLabel: "名前", fieldType: "text", placeholder: "内容を入力", isRequired: true, larkFieldName: "名前", larkFieldType: "Text" },
+      { fieldName: "フリガナ", fieldLabel: "フリガナ", fieldType: "text", placeholder: "※姓・名は空白を（例）ヤマダ タロウ", isRequired: true, larkFieldName: "フリガナ", larkFieldType: "Text" },
+      { fieldName: "性別", fieldLabel: "性別", fieldType: "select", options: ["男性", "女性", "その他"], placeholder: "オプションを選択", isRequired: true, larkFieldName: "性別", larkFieldType: "SingleSelect" },
+      { fieldName: "電話番号", fieldLabel: "電話番号（ハイフンなし）", fieldType: "text", placeholder: "09012345678", isRequired: true, larkFieldName: "電話番号", larkFieldType: "Phone" },
+      { fieldName: "生年月日", fieldLabel: "生年月日（例：1990年1月1日）", fieldType: "date", placeholder: "年/月/日", isRequired: true, larkFieldName: "生年月日", larkFieldType: "DateTime" },
+      { fieldName: "来店のきっかけ", fieldLabel: "どのようにして、当店をお知りになりましたか？", fieldType: "multiselect", options: ["紹介", "instagram", "TikTok", "ホットペッパー"], placeholder: "該当するものを選択", isRequired: true, larkFieldName: "来店のきっかけ", larkFieldType: "MultiSelect" },
     ],
   },
   monthly_goal: {
     title: "月間目標入力フォーム",
     fields: [
-      { fieldName: "年月", fieldLabel: "年月", fieldType: "month", placeholder: "2026年01月", isRequired: true },
-      { fieldName: "目標売上", fieldLabel: "目標売上（単位：円）", fieldType: "number", placeholder: "100000", isRequired: true },
-      { fieldName: "目標稼働日数", fieldLabel: "目標稼働日数（単位：日）", fieldType: "number", placeholder: "20", isRequired: true },
-      { fieldName: "客単価", fieldLabel: "客単価（単位：円）", fieldType: "number", placeholder: "6000", isRequired: true },
+      { fieldName: "年月", fieldLabel: "年月", fieldType: "text", placeholder: "2026年01月", isRequired: true, larkFieldName: "年月", larkFieldType: "Text" },
+      { fieldName: "月間目標売上", fieldLabel: "月間目標売上（単位：円）", fieldType: "number", placeholder: "100000", isRequired: true, larkFieldName: "月間目標売上", larkFieldType: "Currency" },
+      { fieldName: "目標稼働日数", fieldLabel: "目標稼働日数（単位：日）", fieldType: "number", placeholder: "20", isRequired: true, larkFieldName: "目標稼働日数", larkFieldType: "Number" },
+      { fieldName: "客単価", fieldLabel: "客単価（単位：円）", fieldType: "number", placeholder: "6000", isRequired: true, larkFieldName: "客単価", larkFieldType: "Number" },
     ],
   },
   yearly_goal: {
     title: "年間目標入力フォーム",
     fields: [
-      { fieldName: "年度", fieldLabel: "年度", fieldType: "text", placeholder: "2026年", isRequired: true },
-      { fieldName: "年間売上目標", fieldLabel: "年間売上目標（単位：円）", fieldType: "number", placeholder: "2000000", isRequired: true },
-      { fieldName: "客単価", fieldLabel: "客単価（単位：円）", fieldType: "number", placeholder: "6000", isRequired: true },
-      { fieldName: "自由記入欄", fieldLabel: "自由記入欄", fieldType: "textarea", placeholder: "年間計画、理想のサロン、目標など", isRequired: true },
+      { fieldName: "年度", fieldLabel: "年度", fieldType: "text", placeholder: "2026年", isRequired: true, larkFieldName: "年度", larkFieldType: "Text" },
+      { fieldName: "売上", fieldLabel: "年間売上目標（単位：円）", fieldType: "number", placeholder: "2000000", isRequired: true, larkFieldName: "売上", larkFieldType: "Currency" },
+      { fieldName: "客単価", fieldLabel: "客単価（単位：円）", fieldType: "number", placeholder: "6000", isRequired: true, larkFieldName: "客単価", larkFieldType: "Number" },
+      { fieldName: "自由記入欄", fieldLabel: "自由記入欄", fieldType: "textarea", placeholder: "年間計画、理想のサロン、目標など", isRequired: false, larkFieldName: "自由記入欄", larkFieldType: "Text" },
     ],
   },
   karte: {
-    title: "顧客管理情報入力カフォーム",
+    title: "カルテデータ入力フォーム",
     fields: [
-      { fieldName: "カルテID", fieldLabel: "カルテID", fieldType: "text", placeholder: "C-001", isRequired: true },
-      { fieldName: "顧客No", fieldLabel: "顧客No", fieldType: "text", placeholder: "C-001", isRequired: true },
-      { fieldName: "氏名", fieldLabel: "氏名", fieldType: "text", placeholder: "内容を入力", isRequired: true },
-      { fieldName: "顧客区分", fieldLabel: "顧客区分", fieldType: "select", options: ["新規", "既存"], placeholder: "オプションを選択", isRequired: true },
-      { fieldName: "来店年月", fieldLabel: "来店年月", fieldType: "month", placeholder: "2026年01月", isRequired: true },
-      { fieldName: "来店日", fieldLabel: "来店日", fieldType: "date", placeholder: "年/月/日", isRequired: true },
-      { fieldName: "施術コース", fieldLabel: "施術コース", fieldType: "select", options: ["コースA", "コースB", "コースC"], placeholder: "オプションを選択", isRequired: true },
-      { fieldName: "施術コメント", fieldLabel: "施術コメント", fieldType: "textarea", placeholder: "施術内容を入力", isRequired: false },
-      { fieldName: "施術支払額", fieldLabel: "施術：支払額（円）", fieldType: "number", placeholder: "5000", isRequired: true },
-      { fieldName: "物販支払額", fieldLabel: "物販：支払額（円）", fieldType: "number", placeholder: "1000", isRequired: false },
-      { fieldName: "総支払額", fieldLabel: "総支払額（円）", fieldType: "number", placeholder: "6000", isRequired: true },
-      { fieldName: "支払方法", fieldLabel: "支払方法", fieldType: "select", options: ["現金", "クレジット", "電子マネー", "QRコード決済"], placeholder: "オプションを選択", isRequired: true },
+      { fieldName: "顧客区分", fieldLabel: "顧客区分", fieldType: "select", options: ["新規", "既存"], placeholder: "オプションを選択", isRequired: true, larkFieldName: "顧客区分", larkFieldType: "SingleSelect" },
+      { fieldName: "来店日", fieldLabel: "来店日", fieldType: "date", placeholder: "年/月/日", isRequired: true, larkFieldName: "来店日", larkFieldType: "DateTime" },
+      { fieldName: "施術コース", fieldLabel: "施術コース", fieldType: "multiselect", options: ["ヘッドスパ60分", "ヘッドスパ90分", "ヘッドスパ120分", "カット", "カラー", "トリートメント"], placeholder: "該当するものを選択", isRequired: true, larkFieldName: "施術コース", larkFieldType: "MultiSelect" },
+      { fieldName: "施術コメント", fieldLabel: "施術コメント", fieldType: "textarea", placeholder: "施術内容を入力", isRequired: false, larkFieldName: "施術コメント", larkFieldType: "Text" },
+      { fieldName: "施術：支払金額", fieldLabel: "施術：支払金額（円）", fieldType: "number", placeholder: "5000", isRequired: true, larkFieldName: "施術：支払金額", larkFieldType: "Currency" },
+      { fieldName: "物販：支払金額", fieldLabel: "物販：支払金額（円）", fieldType: "number", placeholder: "1000", isRequired: false, larkFieldName: "物販：支払金額", larkFieldType: "Currency" },
+      { fieldName: "支払方法", fieldLabel: "支払方法", fieldType: "multiselect", options: ["現金", "クレジット", "電子マネー", "QRコード決済"], placeholder: "該当するものを選択", isRequired: true, larkFieldName: "支払方法", larkFieldType: "MultiSelect" },
     ],
   },
 };
 
 export type FormType = keyof typeof DEFAULT_FORM_CONFIGS;
 export const FORM_TYPES = Object.keys(DEFAULT_FORM_CONFIGS) as FormType[];
+
+/**
+ * Lark Bitableに書き込み不可のフィールド（AutoNumber, Formula, Lookup, DuplexLink）
+ * これらのフィールドはLark同期時にスキップする
+ */
+export const LARK_READONLY_FIELDS: Record<string, string[]> = {
+  customer: ["顧客No", "氏名", "年齢", "来店年月", "カルテデータ"],
+  karte: ["カルテID", "顧客No", "氏名", "性別", "来店年月", "総支払額"],
+  monthly_goal: ["月間売上目標目安", "売上（日）", "客数（日）"],
+  yearly_goal: ["月間売上目標", "年間来店数目標（人）"],
+};

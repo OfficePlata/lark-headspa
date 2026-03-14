@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useSearch } from "wouter";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
-import { CheckCircle, Loader2, AlertCircle, ChevronDown } from "lucide-react";
+import { CheckCircle, Loader2, AlertCircle, ChevronDown, Check } from "lucide-react";
 import { api } from "@/lib/api";
 
 interface FormField {
@@ -50,7 +50,8 @@ export default function PublicForm() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [formData, setFormData] = useState<Record<string, string>>({});
+  // formData can hold string or string[] for multiselect fields
+  const [formData, setFormData] = useState<Record<string, string | string[]>>({});
   const [error, setError] = useState<string | null>(null);
 
   const loadForm = useCallback(async (type: FormType) => {
@@ -61,8 +62,10 @@ export default function PublicForm() {
       if (data) {
         setConfig(data);
         // Initialize form data
-        const initial: Record<string, string> = {};
-        data.fields.forEach((f) => { initial[f.fieldName] = ""; });
+        const initial: Record<string, string | string[]> = {};
+        data.fields.forEach((f) => {
+          initial[f.fieldName] = f.fieldType === "multiselect" ? [] : "";
+        });
         setFormData(initial);
       } else {
         setError("フォームが見つかりません");
@@ -78,12 +81,31 @@ export default function PublicForm() {
     if (slug) loadForm(formType);
   }, [slug, formType, loadForm]);
 
+  const handleMultiselectToggle = (fieldName: string, option: string) => {
+    setFormData((prev) => {
+      const current = prev[fieldName];
+      const arr = Array.isArray(current) ? [...current] : [];
+      const idx = arr.indexOf(option);
+      if (idx >= 0) {
+        arr.splice(idx, 1);
+      } else {
+        arr.push(option);
+      }
+      return { ...prev, [fieldName]: arr };
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!config) return;
 
     // Validate required fields
-    const missing = config.fields.filter((f) => f.isRequired && !formData[f.fieldName]?.trim());
+    const missing = config.fields.filter((f) => {
+      if (!f.isRequired) return false;
+      const val = formData[f.fieldName];
+      if (Array.isArray(val)) return val.length === 0;
+      return !val?.toString().trim();
+    });
     if (missing.length > 0) {
       toast.error(`必須項目を入力してください: ${missing.map((f) => f.fieldLabel).join("、")}`);
       return;
@@ -99,7 +121,7 @@ export default function PublicForm() {
         } else {
           toast.success("送信完了");
           if (result.syncError) {
-            toast.warning(`Lark同期エラー: ${result.syncError}`);
+            console.warn("Lark sync warning:", result.syncError);
           }
         }
       }
@@ -113,8 +135,10 @@ export default function PublicForm() {
   const handleReset = () => {
     setSubmitted(false);
     if (config) {
-      const initial: Record<string, string> = {};
-      config.fields.forEach((f) => { initial[f.fieldName] = ""; });
+      const initial: Record<string, string | string[]> = {};
+      config.fields.forEach((f) => {
+        initial[f.fieldName] = f.fieldType === "multiselect" ? [] : "";
+      });
       setFormData(initial);
     }
   };
@@ -236,7 +260,7 @@ export default function PublicForm() {
                   {field.fieldType === "select" && field.options ? (
                     <div className="relative">
                       <select
-                        value={formData[field.fieldName] || ""}
+                        value={(formData[field.fieldName] as string) || ""}
                         onChange={(e) => setFormData((prev) => ({ ...prev, [field.fieldName]: e.target.value }))}
                         className="w-full px-4 py-3 appearance-none transition-colors focus:outline-none"
                         style={{
@@ -258,9 +282,42 @@ export default function PublicForm() {
                         style={{ color: c.textMuted }}
                       />
                     </div>
+                  ) : field.fieldType === "multiselect" && field.options ? (
+                    <div className="space-y-2">
+                      {field.options.map((opt) => {
+                        const selected = Array.isArray(formData[field.fieldName])
+                          ? (formData[field.fieldName] as string[]).includes(opt)
+                          : false;
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            onClick={() => handleMultiselectToggle(field.fieldName, opt)}
+                            className="flex items-center gap-3 w-full px-4 py-3 transition-all text-left"
+                            style={{
+                              background: selected ? `${c.primary}10` : c.inputBg,
+                              border: `1px solid ${selected ? c.primary : c.inputBorder}`,
+                              borderRadius: theme.borderRadius,
+                              color: c.text,
+                            }}
+                          >
+                            <div
+                              className="w-5 h-5 rounded flex items-center justify-center flex-shrink-0"
+                              style={{
+                                background: selected ? c.primary : "transparent",
+                                border: `2px solid ${selected ? c.primary : c.inputBorder}`,
+                              }}
+                            >
+                              {selected && <Check className="w-3 h-3 text-white" />}
+                            </div>
+                            <span className="text-sm">{opt}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   ) : field.fieldType === "textarea" ? (
                     <textarea
-                      value={formData[field.fieldName] || ""}
+                      value={(formData[field.fieldName] as string) || ""}
                       onChange={(e) => setFormData((prev) => ({ ...prev, [field.fieldName]: e.target.value }))}
                       placeholder={field.placeholder || ""}
                       rows={4}
@@ -277,7 +334,7 @@ export default function PublicForm() {
                   ) : (
                     <input
                       type={field.fieldType === "number" ? "number" : field.fieldType === "date" ? "date" : field.fieldType === "month" ? "month" : "text"}
-                      value={formData[field.fieldName] || ""}
+                      value={(formData[field.fieldName] as string) || ""}
                       onChange={(e) => setFormData((prev) => ({ ...prev, [field.fieldName]: e.target.value }))}
                       placeholder={field.placeholder || ""}
                       className="w-full px-4 py-3 transition-colors focus:outline-none"

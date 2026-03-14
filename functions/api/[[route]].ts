@@ -4,7 +4,7 @@
  */
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { THEMES, THEME_LIST, getTheme, DEFAULT_FORM_CONFIGS, FORM_TYPES } from "../../shared/themes";
+import { THEMES, THEME_LIST, getTheme, DEFAULT_FORM_CONFIGS, FORM_TYPES, LARK_READONLY_FIELDS } from "../../shared/themes";
 
 // ============================================================
 // Types
@@ -87,27 +87,102 @@ async function createBitableRecord(
   return { recordId: data.data?.record?.record_id || "" };
 }
 
-function mapFormDataToLarkFields(formData: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Map form data to Lark Bitable fields
+ * - Converts date strings to millisecond timestamps
+ * - Converts numeric strings to numbers
+ * - Handles SingleSelect and MultiSelect field types
+ * - Skips read-only fields (AutoNumber, Formula, Lookup, DuplexLink)
+ */
+function mapFormDataToLarkFields(
+  formData: Record<string, unknown>,
+  formType: string
+): Record<string, unknown> {
   const larkFields: Record<string, unknown> = {};
+  const readonlyFields = LARK_READONLY_FIELDS[formType] || [];
+  const formConfig = DEFAULT_FORM_CONFIGS[formType as keyof typeof DEFAULT_FORM_CONFIGS];
+
   for (const [key, value] of Object.entries(formData)) {
+    // Skip empty values
     if (value === null || value === undefined || value === "") continue;
+
+    // Skip read-only fields
+    if (readonlyFields.includes(key)) continue;
+
+    // Find field config to determine Lark field type
+    const fieldConfig = formConfig?.fields.find(
+      (f) => f.fieldName === key || (f as any).larkFieldName === key
+    );
+
+    // Use larkFieldName if available, otherwise use the key as-is
+    const larkFieldName = (fieldConfig as any)?.larkFieldName || key;
+    const larkFieldType = (fieldConfig as any)?.larkFieldType || "";
+
     // Date values → millisecond timestamps
-    if (typeof value === "string" && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(value)) {
-      const date = new Date(value.replace(/\//g, "-"));
-      if (!isNaN(date.getTime())) { larkFields[key] = date.getTime(); continue; }
+    if (larkFieldType === "DateTime" || (typeof value === "string" && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(value))) {
+      const dateStr = typeof value === "string" ? value.replace(/\//g, "-") : String(value);
+      const date = new Date(dateStr);
+      if (!isNaN(date.getTime())) {
+        larkFields[larkFieldName] = date.getTime();
+        continue;
+      }
     }
-    // Year-month values
+
+    // Year-month values → keep as text for Text fields
     if (typeof value === "string" && /^\d{4}[-/]\d{2}$/.test(value)) {
+      if (larkFieldType === "Text") {
+        larkFields[larkFieldName] = value;
+        continue;
+      }
+      // If DateTime, convert to timestamp
       const date = new Date(value.replace(/\//g, "-") + "-01");
-      if (!isNaN(date.getTime())) { larkFields[key] = date.getTime(); continue; }
+      if (!isNaN(date.getTime())) {
+        larkFields[larkFieldName] = date.getTime();
+        continue;
+      }
     }
-    // Numeric strings
-    if (typeof value === "string" && /^\d+$/.test(value)) {
-      larkFields[key] = Number(value);
+
+    // MultiSelect → must be array of strings
+    if (larkFieldType === "MultiSelect") {
+      if (Array.isArray(value)) {
+        larkFields[larkFieldName] = value;
+      } else if (typeof value === "string") {
+        larkFields[larkFieldName] = [value];
+      }
       continue;
     }
-    larkFields[key] = value;
+
+    // SingleSelect → plain string value
+    if (larkFieldType === "SingleSelect") {
+      larkFields[larkFieldName] = String(value);
+      continue;
+    }
+
+    // Phone → plain string
+    if (larkFieldType === "Phone") {
+      larkFields[larkFieldName] = String(value);
+      continue;
+    }
+
+    // Currency / Number → numeric value
+    if (larkFieldType === "Currency" || larkFieldType === "Number") {
+      const num = Number(value);
+      if (!isNaN(num)) {
+        larkFields[larkFieldName] = num;
+        continue;
+      }
+    }
+
+    // Numeric strings (fallback)
+    if (typeof value === "string" && /^\d+(\.\d+)?$/.test(value)) {
+      larkFields[larkFieldName] = Number(value);
+      continue;
+    }
+
+    // Default: pass as-is
+    larkFields[larkFieldName] = value;
   }
+
   return larkFields;
 }
 
@@ -117,6 +192,12 @@ function mapFormDataToLarkFields(formData: Record<string, unknown>): Record<stri
 const app = new Hono<{ Bindings: Env }>().basePath("/api");
 
 app.use("/*", cors());
+
+// Global error handler
+app.onError((err, c) => {
+  console.error("API Error:", err.message, err.stack);
+  return c.json({ error: err.message || "Internal Server Error" }, 500);
+});
 
 // ---------- Health Check ----------
 app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
@@ -244,22 +325,44 @@ app.get("/form/:slug", async (c) => {
 app.post("/form/:slug/submit", async (c) => {
   const db = c.env.SALON_DB;
   const slug = c.req.param("slug");
-  const body = await c.req.json<{ formType: string; formData: Record<string, unknown> }>();
 
-  const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  let body: { formType: string; formData: Record<string, unknown> };
+  try {
+    body = await c.req.json();
+  } catch (e) {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.formType || !body.formData) {
+    return c.json({ error: "formType と formData は必須です" }, 400);
+  }
+
+  let salon: Salon | null;
+  try {
+    salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  } catch (e: any) {
+    console.error("DB error (select salon):", e.message);
+    return c.json({ error: "Database error", details: e.message }, 500);
+  }
+
   if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
 
-  // Save submission
-  const result = await db.prepare(
-    "INSERT INTO submissions (salon_id, form_type, form_data) VALUES (?, ?, ?)"
-  ).bind(salon.id, body.formType, JSON.stringify(body.formData)).run();
+  // Save submission to D1
+  let submissionId: number | null = null;
+  try {
+    const result = await db.prepare(
+      "INSERT INTO submissions (salon_id, form_type, form_data) VALUES (?, ?, ?)"
+    ).bind(salon.id, body.formType, JSON.stringify(body.formData)).run();
+    submissionId = result.meta.last_row_id as number;
+  } catch (e: any) {
+    console.error("DB error (insert submission):", e.message);
+    return c.json({ error: "Failed to save submission", details: e.message }, 500);
+  }
 
-  const submissionId = result.meta.last_row_id;
-
-  // Try Lark sync
+  // Try Lark sync (non-blocking - errors won't cause 500)
   let larkSynced = false;
-  let larkRecordId: string | undefined;
-  let syncError: string | undefined;
+  let larkRecordId: string | null = null;
+  let syncError: string | null = null;
 
   const tableIdMap: Record<string, string | null> = {
     customer: salon.lark_customer_table_id,
@@ -271,7 +374,8 @@ app.post("/form/:slug/submit", async (c) => {
 
   if (salon.lark_app_id && salon.lark_app_secret && salon.lark_bitable_app_token && tableId) {
     try {
-      const larkFields = mapFormDataToLarkFields(body.formData);
+      const larkFields = mapFormDataToLarkFields(body.formData as Record<string, unknown>, body.formType);
+      console.log("Lark fields to sync:", JSON.stringify(larkFields));
       const larkResult = await createBitableRecord(
         salon.lark_app_id, salon.lark_app_secret,
         salon.lark_bitable_app_token, tableId, larkFields
@@ -279,18 +383,29 @@ app.post("/form/:slug/submit", async (c) => {
       larkSynced = true;
       larkRecordId = larkResult.recordId;
     } catch (err: any) {
+      console.error("Lark sync error:", err.message);
       syncError = err.message || "Lark sync failed";
     }
   } else {
-    syncError = "Lark API credentials not configured";
+    syncError = "Lark API credentials not configured for this form type";
   }
 
-  // Update sync status
-  await db.prepare(
-    "UPDATE submissions SET lark_synced = ?, lark_record_id = ?, sync_error = ? WHERE id = ?"
-  ).bind(larkSynced ? 1 : 0, larkRecordId || null, syncError || null, submissionId).run();
+  // Update sync status (non-critical, don't fail the request)
+  try {
+    await db.prepare(
+      "UPDATE submissions SET lark_synced = ?, lark_record_id = ?, sync_error = ? WHERE id = ?"
+    ).bind(larkSynced ? 1 : 0, larkRecordId, syncError, submissionId).run();
+  } catch (e: any) {
+    console.error("DB error (update sync status):", e.message);
+    // Don't fail the request, submission was already saved
+  }
 
-  return c.json({ success: true, submissionId, larkSynced, syncError: syncError || null });
+  return c.json({
+    success: true,
+    submissionId,
+    larkSynced,
+    syncError,
+  });
 });
 
 // ---------- Submission History ----------
