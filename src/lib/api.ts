@@ -66,11 +66,38 @@ export const api = {
         fields: any[];
       } | null>(`/form/${slug}?type=${formType}`),
 
-    submit: (slug: string, formType: string, formData: Record<string, unknown>) =>
+    submit: (slug: string, formType: string, formData: Record<string, unknown>, photoTokens?: string[]) =>
       request<{ success: boolean; submissionId: number; larkSynced: boolean; syncError: string | null }>(
         `/form/${slug}/submit`,
-        { method: "POST", body: JSON.stringify({ formType, formData }) }
+        { method: "POST", body: JSON.stringify({ formType, formData, photoTokens }) }
       ),
+  },
+
+  customers: {
+    list: (slug: string) =>
+      request<{
+        customers: Array<{ recordId: string; customerNo: string; name: string }>;
+        error?: string;
+      }>(`/salons/${slug}/customers`),
+  },
+
+  photos: {
+    upload: async (slug: string, file: File): Promise<{ success: boolean; fileToken: string }> => {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch(`${API_BASE}/salons/${slug}/upload-photo`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error((error as any).error || `Upload Error: ${res.status}`);
+      }
+
+      return res.json();
+    },
   },
 
   formTypes: () =>
