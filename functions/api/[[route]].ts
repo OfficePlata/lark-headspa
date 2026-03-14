@@ -88,6 +88,51 @@ async function createBitableRecord(
 }
 
 /**
+ * Extract plain text from a Lark Bitable field value.
+ * Lark returns different shapes depending on field type:
+ *   - Text / AutoNumber: plain string  → "C-001"
+ *   - Formula (text result): { type: 1, value: ["text"] }
+ *   - Formula (number): { type: 2, value: [123] }
+ *   - Lookup: [{ type: "text", text: "abc" }] or [{ text: "abc" }]
+ *   - RichText / Link segments: [{ type: "text", text: "..." }, ...]
+ *   - Object with text property: { text: "..." }
+ *   - Other: try JSON.stringify fallback
+ */
+function extractLarkFieldText(val: unknown): string {
+  if (val === null || val === undefined) return "";
+  if (typeof val === "string") return val;
+  if (typeof val === "number" || typeof val === "boolean") return String(val);
+
+  // Array form: [{ text: "a" }, { text: "b" }] or ["a", "b"]
+  if (Array.isArray(val)) {
+    return val
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (typeof item === "number") return String(item);
+        if (item && typeof item === "object" && "text" in item) return String((item as any).text);
+        return "";
+      })
+      .filter(Boolean)
+      .join("");
+  }
+
+  // Object form: { type: N, value: [...] } (Formula)
+  if (typeof val === "object" && val !== null) {
+    const obj = val as Record<string, unknown>;
+    if ("value" in obj) {
+      // Recursive: value is usually an array
+      return extractLarkFieldText(obj.value);
+    }
+    if ("text" in obj) {
+      return String(obj.text);
+    }
+  }
+
+  // Fallback
+  return "";
+}
+
+/**
  * Fetch customer list from Lark Bitable (顧客情報テーブル)
  * Returns list of { recordId, customerNo, name } for the customer_lookup field
  */
@@ -126,17 +171,21 @@ async function fetchCustomerList(
     const items = data.data?.items || [];
     for (const item of items) {
       const fields = item.fields || {};
-      // Try common field names for customer number and name
-      const customerNo = fields["顧客No"] || fields["顧客no"] || fields["No"] || "";
-      const sei = fields["姓"] || "";
-      const mei = fields["名前"] || fields["名"] || "";
-      const shimei = fields["氏名"] || "";
+      // Extract plain text from Lark field values
+      // Lark returns different formats depending on field type:
+      //   Text: "string"
+      //   AutoNumber: "C-001"
+      //   Formula/Lookup: { type: 0, value: [...] } or [{ type: "text", text: "..." }]
+      const customerNo = extractLarkFieldText(fields["顧客No"] ?? fields["顧客no"] ?? fields["No"] ?? "");
+      const sei = extractLarkFieldText(fields["姓"] ?? "");
+      const mei = extractLarkFieldText(fields["名前"] ?? fields["名"] ?? "");
+      const shimei = extractLarkFieldText(fields["氏名"] ?? "");
       const displayName = shimei || `${sei} ${mei}`.trim() || "名前なし";
 
       customers.push({
         recordId: item.record_id,
-        customerNo: String(customerNo),
-        name: String(displayName),
+        customerNo: customerNo || item.record_id,
+        name: displayName,
       });
     }
 
@@ -148,24 +197,26 @@ async function fetchCustomerList(
 }
 
 /**
- * Upload a file to Lark Drive and return the file_token for Bitable attachment
+ * Upload a file to Lark Drive for use as a Bitable attachment.
+ * For Bitable attachments, use parent_type = "bitable_image" 
+ * and parent_node = bitable app_token.
  */
 async function uploadFileToLark(
   appId: string,
   appSecret: string,
+  appToken: string,
   fileData: ArrayBuffer,
   fileName: string,
   mimeType: string
 ): Promise<string> {
   const token = await getTenantAccessToken(appId, appSecret);
 
-  // Upload via Lark Drive media upload API
   const formData = new FormData();
   const blob = new Blob([fileData], { type: mimeType });
   formData.append("file", blob, fileName);
   formData.append("file_name", fileName);
-  formData.append("parent_type", "bitable_file");
-  formData.append("parent_node", "");
+  formData.append("parent_type", "bitable_image");
+  formData.append("parent_node", appToken);
   formData.append("size", String(fileData.byteLength));
 
   const res = await fetch(
@@ -427,7 +478,7 @@ app.post("/salons/:slug/upload-photo", async (c) => {
   const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
   if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
 
-  if (!salon.lark_app_id || !salon.lark_app_secret) {
+  if (!salon.lark_app_id || !salon.lark_app_secret || !salon.lark_bitable_app_token) {
     return c.json({ error: "Lark API設定が不足しています" }, 400);
   }
 
@@ -453,6 +504,7 @@ app.post("/salons/:slug/upload-photo", async (c) => {
     const fileToken = await uploadFileToLark(
       salon.lark_app_id,
       salon.lark_app_secret,
+      salon.lark_bitable_app_token,
       arrayBuffer,
       file.name,
       file.type
