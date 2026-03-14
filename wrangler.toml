@@ -1,0 +1,23 @@
+name = "lark-headspa"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+# ============================================================
+# Cloudflare D1 Database
+# ============================================================
+# 1. `wrangler d1 create salon-db` でD1データベースを作成
+# 2. 出力されたdatabase_idを以下に貼り付け
+# 3. `pnpm db:migrate:remote` でテーブルを作成
+# ============================================================
+[[d1_databases]]
+binding = "SALON_DB"
+database_name = "salon-db"
+database_id = "<YOUR_D1_DATABASE_ID>"
+
+# ============================================================
+# 環境変数（Cloudflare Dashboard > Pages > Settings > Environment Variables で設定）
+# ============================================================
+# LARK_APP_ID        - Lark Open Platform App ID（オプション：グローバル設定用）
+# LARK_APP_SECRET    - Lark Open Platform App Secret（オプション：グローバル設定用）
+# AUTH_SECRET        - セッション署名用シークレット（任意の文字列）

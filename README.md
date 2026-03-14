@@ -1,195 +1,182 @@
-# Salon Form System
+# Lark HeadSpa - Salon Form System
 
-Lark Bitable API と連携した美容サロン向け顧客情報入力フォームシステムです。フォームから送信されたデータは自動的に Lark BASE に保存されます。代理店が独自のデザインテーマを選択してフォームをカスタマイズできる機能も備えています。
+美容サロン向けの顧客情報入力フォームシステムです。Lark Bitable APIと連携し、フォーム送信データを自動的にLark BASEに保存します。
 
----
+## 技術構成
 
-## 概要
-
-このシステムは、美容サロンの顧客管理業務を効率化するために設計されました。Lark の標準フォーム UI ではなく、サロンのブランドイメージに合わせた美しい外部フォームを提供し、送信データを Lark Bitable に自動同期します。
-
-| 機能 | 説明 |
-|------|------|
-| Lark BASE 連携 | フォーム送信データを Lark Bitable API 経由で自動保存 |
-| 4 種類のフォーム | 新規顧客情報、カルテデータ、月間目標、年間目標 |
-| 5 種類のデザインテーマ | カルメ、ナチュラル、エレガント、フレッシュ、サクラ |
-| 代理店向け管理画面 | サロンごとにテーマ選択・Lark API 設定・送信履歴確認 |
-| オーナー通知 | フォーム送信時に管理者へ自動通知 |
-
----
-
-## 技術スタック
-
-| カテゴリ | 技術 |
-|----------|------|
-| フロントエンド | React 19, TypeScript, Tailwind CSS 4, shadcn/ui |
-| バックエンド | Express 4, tRPC 11, Drizzle ORM |
-| データベース | MySQL / TiDB |
-| 外部 API | Lark Bitable API (Open Platform) |
-| ビルドツール | Vite 7, esbuild, pnpm |
-| テスト | Vitest |
-
----
+| レイヤー | 技術 |
+|---------|------|
+| フロントエンド | React 19 + Tailwind CSS 4 + Vite |
+| バックエンド | Hono（Cloudflare Pages Functions） |
+| データベース | Cloudflare D1（SQLite） |
+| ホスティング | Cloudflare Pages |
+| 外部連携 | Lark Bitable API |
 
 ## ディレクトリ構成
 
 ```
-lark-form-project/
-├── client/                  # フロントエンド（React）
-│   ├── src/
-│   │   ├── pages/           # ページコンポーネント
-│   │   ├── components/      # 再利用可能なUIコンポーネント
-│   │   ├── contexts/        # React コンテキスト（テーマ管理等）
-│   │   ├── lib/             # tRPC クライアント
-│   │   ├── App.tsx          # ルーティング定義
-│   │   └── index.css        # グローバルスタイル
-│   └── index.html           # HTML テンプレート
-├── server/                  # バックエンド（Express + tRPC）
-│   ├── _core/               # フレームワーク基盤（認証、OAuth等）
-│   ├── routers.ts           # tRPC ルーター定義
-│   ├── db.ts                # データベースクエリヘルパー
-│   ├── lark.ts              # Lark Bitable API 連携ヘルパー
-│   └── storage.ts           # S3 ストレージヘルパー
-├── drizzle/                 # データベーススキーマ・マイグレーション
-│   ├── schema.ts            # テーブル定義
-│   └── *.sql                # マイグレーション SQL
-├── shared/                  # フロント・バック共有コード
-│   ├── themes.ts            # デザインテーマ定義
-│   └── const.ts             # 共有定数
-├── DEPLOY_GUIDE.md          # デプロイ手順書
+lark-headspa-cf/
+├── functions/              ← Cloudflare Pages Functions（API）
+│   └── api/
+│       └── [[route]].ts    ← Hono APIサーバー（全APIルート）
+├── src/                    ← フロントエンド（React）
+│   ├── pages/
+│   │   ├── Home.tsx        ← ランディングページ
+│   │   ├── PublicForm.tsx  ← 公開フォーム（テーマ動的切替）
+│   │   └── Dashboard.tsx   ← 管理画面（サロン・テーマ・Lark設定）
+│   ├── lib/
+│   │   └── api.ts          ← APIクライアント
+│   ├── App.tsx             ← ルーティング
+│   ├── main.tsx            ← エントリーポイント
+│   └── index.css           ← グローバルスタイル
+├── shared/                 ← フロント・バックエンド共有
+│   └── themes.ts           ← デザインテーマ定義（5種類）
+├── drizzle/
+│   └── migrations/
+│       └── 0001_init.sql   ← D1マイグレーション
+├── public/                 ← 静的ファイル
+│   ├── _routes.json        ← Cloudflare Pages ルーティング設定
+│   └── _redirects          ← SPA用リダイレクト
+├── wrangler.toml           ← Cloudflare設定
+├── vite.config.ts          ← Viteビルド設定
 └── package.json
 ```
 
----
+## セットアップ手順
 
-## セットアップ
+### 1. 前提条件
 
-### 前提条件
+- Node.js 18以上
+- pnpm（推奨）
+- Cloudflareアカウント
+- Wrangler CLI（`npm install -g wrangler`）
 
-- Node.js 22 以上
-- pnpm 10 以上
-- MySQL または TiDB データベース
-- Lark Open Platform アカウント
-
-### インストール
+### 2. 依存関係のインストール
 
 ```bash
-# 依存関係のインストール
 pnpm install
-
-# 開発サーバーの起動
-pnpm dev
 ```
 
-### 環境変数
+### 3. Cloudflare D1データベースの作成
 
-以下の環境変数を `.env` ファイルに設定してください。
+```bash
+# D1データベースを作成
+wrangler d1 create salon-db
+
+# 出力されたdatabase_idをwrangler.tomlに貼り付け
+# database_id = "<YOUR_D1_DATABASE_ID>"
+
+# マイグレーション実行（ローカル）
+pnpm db:migrate:local
+
+# マイグレーション実行（リモート）
+pnpm db:migrate:remote
+```
+
+### 4. ローカル開発
+
+```bash
+# フロントエンド開発サーバー（Vite）
+pnpm dev
+
+# 別ターミナルでバックエンド（Wrangler Pages）
+pnpm pages:dev
+```
+
+フロントエンドは `http://localhost:5173`、APIは `http://localhost:8788` で起動します。
+Viteのプロキシ設定により、フロントエンドから `/api/*` へのリクエストは自動的にバックエンドに転送されます。
+
+### 5. デプロイ
+
+#### 方法A: Wrangler CLIでデプロイ
+
+```bash
+pnpm pages:deploy
+```
+
+#### 方法B: GitHub連携（推奨）
+
+1. Cloudflare Dashboard > Pages > 「プロジェクトを作成」
+2. GitHubリポジトリ（`OfficePlata/lark-headspa`）を接続
+3. ビルド設定:
+   - **フレームワークプリセット**: なし
+   - **ビルドコマンド**: `pnpm install && pnpm build`
+   - **ビルド出力ディレクトリ**: `dist`
+4. 環境変数を設定（下記参照）
+5. D1データベースをバインド:
+   - Settings > Functions > D1 database bindings
+   - Variable name: `SALON_DB`
+   - D1 database: 作成したデータベースを選択
+
+### 6. 環境変数
+
+Cloudflare Dashboard > Pages > Settings > Environment Variables で以下を設定:
 
 | 変数名 | 説明 | 必須 |
 |--------|------|------|
-| `DATABASE_URL` | MySQL/TiDB 接続文字列 | 必須 |
-| `JWT_SECRET` | セッション署名用シークレット | 必須 |
-| `NODE_ENV` | 実行環境（development / production） | 任意 |
+| `LARK_APP_ID` | Lark App ID（グローバル設定用） | 任意 |
+| `LARK_APP_SECRET` | Lark App Secret（グローバル設定用） | 任意 |
+| `AUTH_SECRET` | セッション署名用シークレット | 任意 |
 
-Lark API の認証情報（App ID、App Secret、Bitable App Token、各テーブル ID）は、管理画面のサロン設定から入力します。
+> Lark APIの認証情報はサロンごとに管理画面から個別に設定することもできます。
 
----
+## Lark Bitable連携の設定
 
-## 使い方
+### Lark Open Platformでの準備
 
-### 1. サロンの作成
+1. [Lark Open Platform](https://open.larksuite.com/) にアクセス
+2. 新しいアプリを作成
+3. 以下の権限を有効化:
+   - `bitable:app` - Bitable アプリへのアクセス
+   - `bitable:record` - レコードの読み書き
+4. App IDとApp Secretを取得
 
-管理画面（`/dashboard`）にログインし、「+」ボタンからサロンを作成します。サロン名と URL 用のスラッグを入力してください。
+### Bitable（多次元表）の準備
 
-### 2. Lark API の設定
+1. Lark Baseで以下のテーブルを作成:
+   - **顧客情報テーブル**: 日付、姓、名、フリガナ、性別、電話番号、生年月日、来店経緯
+   - **カルテテーブル**: カルテID、顧客No、氏名、顧客区分、来店年月、来店日、施術コース、施術コメント、施術支払額、物販支払額、総支払額、支払方法
+   - **月間目標テーブル**: 年月、目標売上、目標稼働日数、客単価
+   - **年間目標テーブル**: 年度、年間売上目標、客単価、自由記入欄
+2. Bitable URLからApp Tokenを取得（URLの `app_token` パラメータ）
+3. 各テーブルのTable IDを取得
 
-作成したサロンを選択し、「Lark 設定」タブから以下を入力します。
+### 管理画面での設定
 
-| 設定項目 | 取得元 |
-|----------|--------|
-| App ID | Lark Open Platform > アプリ管理 |
-| App Secret | Lark Open Platform > アプリ管理 |
-| Bitable App Token | BASE の URL: `https://xxx.larksuite.com/base/{appToken}` |
-| 各テーブル ID | BASE の URL: `?table={tableId}` |
+1. `/dashboard` にアクセス
+2. サロンを作成
+3. 「Lark設定」タブで認証情報とテーブルIDを入力
+4. フォームから送信テスト
 
-### 3. デザインテーマの選択
+## デザインテーマ
 
-「デザイン」タブから 5 種類のテーマを選択できます。
+5種類のデザインテーマから選択できます:
 
-| テーマ名 | 特徴 | カラー |
-|----------|------|--------|
-| カルメ | 落ち着いた癒し系 | ベージュ × ゴールド |
-| ナチュラル | 自然派・オーガニック | グリーン × アースカラー |
-| エレガント | 高級感・プレミアム | ネイビー × ゴールド |
-| フレッシュ | 清潔感・爽やか | ライトブルー × ホワイト |
-| サクラ | 華やか・女性的 | ピンク × ローズ |
+| テーマ | 説明 | メインカラー |
+|--------|------|-------------|
+| カルメ | 落ち着いたベージュ×ゴールドの癒し系 | #8B7355 |
+| ナチュラル | 自然派・オーガニック系のグリーン | #5B7B5B |
+| エレガント | ネイビー×ゴールドの高級感 | #2C3E6B |
+| フレッシュ | ライトブルー×ホワイトの清潔感 | #4A90B8 |
+| サクラ | ピンク×ローズの華やかさ | #C07088 |
 
-### 4. フォーム URL の共有
+管理画面の「テーマ」タブからワンクリックで切り替え可能です。
 
-「フォーム URL」タブから各フォームの URL をコピーし、お客様やスタッフに共有してください。
+## APIエンドポイント
 
-```
-https://YOUR_DOMAIN/form/{slug}?type=customer       # 新規顧客情報
-https://YOUR_DOMAIN/form/{slug}?type=karte           # カルテデータ
-https://YOUR_DOMAIN/form/{slug}?type=monthly_goal    # 月間目標
-https://YOUR_DOMAIN/form/{slug}?type=yearly_goal     # 年間目標
-```
-
----
-
-## 対応フォーム
-
-### 新規顧客情報入力フォーム
-
-日付、姓、名、フリガナ、性別、電話番号、生年月日、来店経緯の 8 項目を入力します。Lark BASE の「新規顧客データ」テーブルに対応しています。
-
-### カルテデータ入力フォーム
-
-カルテ ID、顧客 No、氏名、顧客区分、来店年月、来店日、施術コース、施術コメント、施術支払額、物販支払額、総支払額、支払方法の 12 項目を入力します。Lark BASE の「カルテデータ」テーブルに対応しています。
-
-### 月間目標入力フォーム
-
-年月、目標売上、目標稼働日数、客単価の 4 項目を入力します。Lark BASE の「月間目標シート」テーブルに対応しています。
-
-### 年間目標入力フォーム
-
-年度、年間売上目標、客単価、自由記入欄の 4 項目を入力します。Lark BASE の「年間目標シート」テーブルに対応しています。
-
----
-
-## API エンドポイント
-
-tRPC を使用しており、すべての API は `/api/trpc` 配下で提供されます。
-
-| プロシージャ | 種別 | 認証 | 説明 |
-|-------------|------|------|------|
-| `themes.list` | Query | 不要 | テーマ一覧取得 |
-| `themes.get` | Query | 不要 | テーマ詳細取得 |
-| `salon.list` | Query | 必要 | ユーザーのサロン一覧 |
-| `salon.create` | Mutation | 必要 | サロン作成 |
-| `salon.get` | Query | 必要 | サロン詳細取得 |
-| `salon.update` | Mutation | 必要 | サロン設定更新 |
-| `salon.submissions` | Query | 必要 | 送信履歴取得 |
-| `form.getBySlug` | Query | 不要 | 公開フォーム情報取得 |
-| `form.submit` | Mutation | 不要 | フォームデータ送信 |
-
----
-
-## テスト
-
-```bash
-pnpm test
-```
-
-テーマ定義、フォーム設定、Lark フィールドマッピングのユニットテストが含まれています。
-
----
-
-## デプロイ
-
-GitHub + Cloudflare Pages/Workers でのデプロイ手順は [DEPLOY_GUIDE.md](./DEPLOY_GUIDE.md) を参照してください。
-
----
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET | `/api/health` | ヘルスチェック |
+| GET | `/api/themes` | テーマ一覧取得 |
+| GET | `/api/themes/:id` | テーマ詳細取得 |
+| GET | `/api/salons` | サロン一覧取得 |
+| POST | `/api/salons` | サロン作成 |
+| GET | `/api/salons/:id` | サロン詳細取得 |
+| PUT | `/api/salons/:id` | サロン更新 |
+| GET | `/api/form/:slug` | 公開フォーム設定取得 |
+| POST | `/api/form/:slug/submit` | フォーム送信 |
+| GET | `/api/salons/:id/submissions` | 送信履歴取得 |
+| GET | `/api/form-types` | フォームタイプ一覧 |
 
 ## ライセンス
 

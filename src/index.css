@@ -1,0 +1,49 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  --font-sans: "Noto Sans JP", sans-serif;
+  --font-serif: "Noto Serif JP", serif;
+}
+
+@theme inline {
+  --color-background: oklch(0.98 0.005 80);
+  --color-foreground: oklch(0.25 0.02 50);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.25 0.02 50);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.25 0.02 50);
+  --color-primary: oklch(0.55 0.05 60);
+  --color-primary-foreground: oklch(0.98 0.005 80);
+  --color-secondary: oklch(0.82 0.03 80);
+  --color-secondary-foreground: oklch(0.35 0.03 50);
+  --color-muted: oklch(0.92 0.01 80);
+  --color-muted-foreground: oklch(0.55 0.03 60);
+  --color-accent: oklch(0.72 0.08 70);
+  --color-accent-foreground: oklch(0.98 0.005 80);
+  --color-destructive: oklch(0.55 0.15 25);
+  --color-destructive-foreground: oklch(0.98 0.005 80);
+  --color-border: oklch(0.88 0.02 80);
+  --color-input: oklch(0.88 0.02 80);
+  --color-ring: oklch(0.72 0.08 70);
+  --radius: 0.75rem;
+  --font-sans: "Noto Sans JP", sans-serif;
+  --font-serif: "Noto Serif JP", serif;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-serif);
+}

@@ -1,0 +1,333 @@
+/**
+ * Cloudflare Pages Functions - Hono API Server
+ * All API routes under /api/* are handled here
+ */
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { THEMES, THEME_LIST, getTheme, DEFAULT_FORM_CONFIGS, FORM_TYPES } from "../../shared/themes";
+
+// ============================================================
+// Types
+// ============================================================
+interface Env {
+  SALON_DB: D1Database;
+  LARK_APP_ID?: string;
+  LARK_APP_SECRET?: string;
+  AUTH_SECRET?: string;
+}
+
+interface Salon {
+  id: number;
+  salon_name: string;
+  slug: string;
+  theme_id: string;
+  logo_url: string | null;
+  lark_app_id: string | null;
+  lark_app_secret: string | null;
+  lark_bitable_app_token: string | null;
+  lark_customer_table_id: string | null;
+  lark_monthly_goal_table_id: string | null;
+  lark_yearly_goal_table_id: string | null;
+  lark_karte_table_id: string | null;
+  is_active: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface Submission {
+  id: number;
+  salon_id: number;
+  form_type: string;
+  form_data: string;
+  lark_synced: number;
+  lark_record_id: string | null;
+  sync_error: string | null;
+  created_at: string;
+}
+
+// ============================================================
+// Lark API Helpers
+// ============================================================
+async function getTenantAccessToken(appId: string, appSecret: string): Promise<string> {
+  const res = await fetch("https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const data = await res.json() as any;
+  if (data.code !== 0) {
+    throw new Error(`Lark auth failed: ${data.msg || "Unknown error"}`);
+  }
+  return data.tenant_access_token;
+}
+
+async function createBitableRecord(
+  appId: string,
+  appSecret: string,
+  appToken: string,
+  tableId: string,
+  fields: Record<string, unknown>
+): Promise<{ recordId: string }> {
+  const token = await getTenantAccessToken(appId, appSecret);
+  const res = await fetch(
+    `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ fields }),
+    }
+  );
+  const data = await res.json() as any;
+  if (data.code !== 0) {
+    throw new Error(`Lark Bitable error: ${data.msg || "Unknown"} (code: ${data.code})`);
+  }
+  return { recordId: data.data?.record?.record_id || "" };
+}
+
+function mapFormDataToLarkFields(formData: Record<string, unknown>): Record<string, unknown> {
+  const larkFields: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(formData)) {
+    if (value === null || value === undefined || value === "") continue;
+    // Date values → millisecond timestamps
+    if (typeof value === "string" && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(value)) {
+      const date = new Date(value.replace(/\//g, "-"));
+      if (!isNaN(date.getTime())) { larkFields[key] = date.getTime(); continue; }
+    }
+    // Year-month values
+    if (typeof value === "string" && /^\d{4}[-/]\d{2}$/.test(value)) {
+      const date = new Date(value.replace(/\//g, "-") + "-01");
+      if (!isNaN(date.getTime())) { larkFields[key] = date.getTime(); continue; }
+    }
+    // Numeric strings
+    if (typeof value === "string" && /^\d+$/.test(value)) {
+      larkFields[key] = Number(value);
+      continue;
+    }
+    larkFields[key] = value;
+  }
+  return larkFields;
+}
+
+// ============================================================
+// Hono App
+// ============================================================
+const app = new Hono<{ Bindings: Env }>().basePath("/api");
+
+app.use("/*", cors());
+
+// ---------- Health Check ----------
+app.get("/health", (c) => c.json({ status: "ok", timestamp: new Date().toISOString() }));
+
+// ---------- Theme Routes ----------
+app.get("/themes", (c) => {
+  return c.json(THEME_LIST.map((t) => ({
+    id: t.id, name: t.name, nameJa: t.nameJa, description: t.description,
+    colors: t.colors, fonts: t.fonts, borderRadius: t.borderRadius,
+  })));
+});
+
+app.get("/themes/:id", (c) => {
+  const theme = getTheme(c.req.param("id"));
+  return c.json(theme);
+});
+
+// ---------- Salon CRUD ----------
+app.get("/salons", async (c) => {
+  const db = c.env.SALON_DB;
+  const salons = await db.prepare("SELECT * FROM salons ORDER BY created_at DESC").all<Salon>();
+  return c.json(salons.results);
+});
+
+app.post("/salons", async (c) => {
+  const db = c.env.SALON_DB;
+  const body = await c.req.json<{ salonName: string; slug: string; themeId?: string }>();
+
+  if (!body.salonName || !body.slug) {
+    return c.json({ error: "salonName と slug は必須です" }, 400);
+  }
+  if (!/^[a-z0-9-]+$/.test(body.slug)) {
+    return c.json({ error: "slug は半角英数字とハイフンのみ使用できます" }, 400);
+  }
+
+  // Check slug uniqueness
+  const existing = await db.prepare("SELECT id FROM salons WHERE slug = ?").bind(body.slug).first();
+  if (existing) {
+    return c.json({ error: "このスラッグは既に使用されています" }, 409);
+  }
+
+  const result = await db.prepare(
+    "INSERT INTO salons (salon_name, slug, theme_id) VALUES (?, ?, ?)"
+  ).bind(body.salonName, body.slug, body.themeId || "calmer").run();
+
+  return c.json({ id: result.meta.last_row_id, success: true }, 201);
+});
+
+app.get("/salons/:id", async (c) => {
+  const db = c.env.SALON_DB;
+  const salon = await db.prepare("SELECT * FROM salons WHERE id = ?").bind(Number(c.req.param("id"))).first<Salon>();
+  if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
+  return c.json(salon);
+});
+
+app.put("/salons/:id", async (c) => {
+  const db = c.env.SALON_DB;
+  const id = Number(c.req.param("id"));
+  const body = await c.req.json<Partial<Record<string, string>>>();
+
+  const allowedFields = [
+    "salon_name", "theme_id", "logo_url",
+    "lark_app_id", "lark_app_secret", "lark_bitable_app_token",
+    "lark_customer_table_id", "lark_monthly_goal_table_id",
+    "lark_yearly_goal_table_id", "lark_karte_table_id",
+  ];
+
+  const updates: string[] = [];
+  const values: unknown[] = [];
+
+  for (const [key, value] of Object.entries(body)) {
+    // Convert camelCase to snake_case
+    const snakeKey = key.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
+    if (allowedFields.includes(snakeKey)) {
+      updates.push(`${snakeKey} = ?`);
+      values.push(value);
+    }
+  }
+
+  if (updates.length === 0) {
+    return c.json({ error: "更新するフィールドがありません" }, 400);
+  }
+
+  updates.push("updated_at = datetime('now')");
+  values.push(id);
+
+  await db.prepare(`UPDATE salons SET ${updates.join(", ")} WHERE id = ?`).bind(...values).run();
+  return c.json({ success: true });
+});
+
+// ---------- Public Form Routes ----------
+app.get("/form/:slug", async (c) => {
+  const db = c.env.SALON_DB;
+  const slug = c.req.param("slug");
+  const formType = c.req.query("type") || "customer";
+
+  const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
+
+  const theme = getTheme(salon.theme_id);
+  const formConfig = DEFAULT_FORM_CONFIGS[formType as keyof typeof DEFAULT_FORM_CONFIGS];
+
+  return c.json({
+    salon: {
+      id: salon.id,
+      salonName: salon.salon_name,
+      slug: salon.slug,
+      logoUrl: salon.logo_url,
+    },
+    theme,
+    formTitle: formConfig?.title || "入力フォーム",
+    fields: (formConfig?.fields || []).map((f, i) => ({
+      id: i,
+      fieldName: f.fieldName,
+      fieldLabel: f.fieldLabel,
+      fieldType: f.fieldType,
+      options: "options" in f ? f.options : null,
+      placeholder: f.placeholder || null,
+      isRequired: f.isRequired ?? true,
+      sortOrder: i,
+    })),
+  });
+});
+
+app.post("/form/:slug/submit", async (c) => {
+  const db = c.env.SALON_DB;
+  const slug = c.req.param("slug");
+  const body = await c.req.json<{ formType: string; formData: Record<string, unknown> }>();
+
+  const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
+
+  // Save submission
+  const result = await db.prepare(
+    "INSERT INTO submissions (salon_id, form_type, form_data) VALUES (?, ?, ?)"
+  ).bind(salon.id, body.formType, JSON.stringify(body.formData)).run();
+
+  const submissionId = result.meta.last_row_id;
+
+  // Try Lark sync
+  let larkSynced = false;
+  let larkRecordId: string | undefined;
+  let syncError: string | undefined;
+
+  const tableIdMap: Record<string, string | null> = {
+    customer: salon.lark_customer_table_id,
+    monthly_goal: salon.lark_monthly_goal_table_id,
+    yearly_goal: salon.lark_yearly_goal_table_id,
+    karte: salon.lark_karte_table_id,
+  };
+  const tableId = tableIdMap[body.formType];
+
+  if (salon.lark_app_id && salon.lark_app_secret && salon.lark_bitable_app_token && tableId) {
+    try {
+      const larkFields = mapFormDataToLarkFields(body.formData);
+      const larkResult = await createBitableRecord(
+        salon.lark_app_id, salon.lark_app_secret,
+        salon.lark_bitable_app_token, tableId, larkFields
+      );
+      larkSynced = true;
+      larkRecordId = larkResult.recordId;
+    } catch (err: any) {
+      syncError = err.message || "Lark sync failed";
+    }
+  } else {
+    syncError = "Lark API credentials not configured";
+  }
+
+  // Update sync status
+  await db.prepare(
+    "UPDATE submissions SET lark_synced = ?, lark_record_id = ?, sync_error = ? WHERE id = ?"
+  ).bind(larkSynced ? 1 : 0, larkRecordId || null, syncError || null, submissionId).run();
+
+  return c.json({ success: true, submissionId, larkSynced, syncError: syncError || null });
+});
+
+// ---------- Submission History ----------
+app.get("/salons/:id/submissions", async (c) => {
+  const db = c.env.SALON_DB;
+  const salonId = Number(c.req.param("id"));
+  const formType = c.req.query("formType");
+
+  let query = "SELECT * FROM submissions WHERE salon_id = ?";
+  const bindings: unknown[] = [salonId];
+
+  if (formType) {
+    query += " AND form_type = ?";
+    bindings.push(formType);
+  }
+  query += " ORDER BY created_at DESC LIMIT 100";
+
+  const subs = await db.prepare(query).bind(...bindings).all<Submission>();
+  return c.json(subs.results.map((s) => ({
+    ...s,
+    formData: JSON.parse(s.form_data),
+    larkSynced: !!s.lark_synced,
+  })));
+});
+
+// ---------- Form Types ----------
+app.get("/form-types", (c) => {
+  return c.json(FORM_TYPES.map((ft) => ({
+    id: ft,
+    title: DEFAULT_FORM_CONFIGS[ft].title,
+    fieldCount: DEFAULT_FORM_CONFIGS[ft].fields.length,
+  })));
+});
+
+// ============================================================
+// Export for Cloudflare Pages Functions
+// ============================================================
+export const onRequest: PagesFunction<Env> = async (context) => {
+  return app.fetch(context.request, context.env, context.ctx);
+};
