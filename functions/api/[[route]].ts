@@ -88,11 +88,112 @@ async function createBitableRecord(
 }
 
 /**
+ * Fetch customer list from Lark Bitable (顧客情報テーブル)
+ * Returns list of { recordId, customerNo, name } for the customer_lookup field
+ */
+async function fetchCustomerList(
+  appId: string,
+  appSecret: string,
+  appToken: string,
+  tableId: string
+): Promise<Array<{ recordId: string; customerNo: string; name: string }>> {
+  const token = await getTenantAccessToken(appId, appSecret);
+
+  const customers: Array<{ recordId: string; customerNo: string; name: string }> = [];
+  let pageToken: string | undefined;
+  let hasMore = true;
+
+  while (hasMore) {
+    const url = new URL(
+      `https://open.larksuite.com/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records`
+    );
+    url.searchParams.set("page_size", "100");
+    if (pageToken) {
+      url.searchParams.set("page_token", pageToken);
+    }
+
+    const res = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    const data = await res.json() as any;
+
+    if (data.code !== 0) {
+      throw new Error(`Lark Bitable list error: ${data.msg || "Unknown"} (code: ${data.code})`);
+    }
+
+    const items = data.data?.items || [];
+    for (const item of items) {
+      const fields = item.fields || {};
+      // Try common field names for customer number and name
+      const customerNo = fields["顧客No"] || fields["顧客no"] || fields["No"] || "";
+      const sei = fields["姓"] || "";
+      const mei = fields["名前"] || fields["名"] || "";
+      const shimei = fields["氏名"] || "";
+      const displayName = shimei || `${sei} ${mei}`.trim() || "名前なし";
+
+      customers.push({
+        recordId: item.record_id,
+        customerNo: String(customerNo),
+        name: String(displayName),
+      });
+    }
+
+    hasMore = data.data?.has_more || false;
+    pageToken = data.data?.page_token;
+  }
+
+  return customers;
+}
+
+/**
+ * Upload a file to Lark Drive and return the file_token for Bitable attachment
+ */
+async function uploadFileToLark(
+  appId: string,
+  appSecret: string,
+  fileData: ArrayBuffer,
+  fileName: string,
+  mimeType: string
+): Promise<string> {
+  const token = await getTenantAccessToken(appId, appSecret);
+
+  // Upload via Lark Drive media upload API
+  const formData = new FormData();
+  const blob = new Blob([fileData], { type: mimeType });
+  formData.append("file", blob, fileName);
+  formData.append("file_name", fileName);
+  formData.append("parent_type", "bitable_file");
+  formData.append("parent_node", "");
+  formData.append("size", String(fileData.byteLength));
+
+  const res = await fetch(
+    "https://open.larksuite.com/open-apis/drive/v1/medias/upload_all",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      body: formData,
+    }
+  );
+
+  const data = await res.json() as any;
+  if (data.code !== 0) {
+    throw new Error(`Lark file upload error: ${data.msg || "Unknown"} (code: ${data.code})`);
+  }
+
+  return data.data?.file_token || "";
+}
+
+/**
  * Map form data to Lark Bitable fields
  * - Converts date strings to millisecond timestamps
  * - Converts numeric strings to numbers
  * - Handles SingleSelect and MultiSelect field types
  * - Skips read-only fields (AutoNumber, Formula, Lookup, DuplexLink)
+ * - Skips photo fields (handled separately)
  */
 function mapFormDataToLarkFields(
   formData: Record<string, unknown>,
@@ -117,6 +218,10 @@ function mapFormDataToLarkFields(
     // Use larkFieldName if available, otherwise use the key as-is
     const larkFieldName = (fieldConfig as any)?.larkFieldName || key;
     const larkFieldType = (fieldConfig as any)?.larkFieldType || "";
+    const fieldType = (fieldConfig as any)?.fieldType || "";
+
+    // Skip photo fields - they are handled separately via file upload
+    if (fieldType === "photo" || larkFieldType === "Attachment") continue;
 
     // Date values → millisecond timestamps
     if (larkFieldType === "DateTime" || (typeof value === "string" && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(value))) {
@@ -288,6 +393,78 @@ app.put("/salons/:id", async (c) => {
   return c.json({ success: true });
 });
 
+// ---------- Customer List (for customer_lookup field) ----------
+app.get("/salons/:slug/customers", async (c) => {
+  const db = c.env.SALON_DB;
+  const slug = c.req.param("slug");
+
+  const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
+
+  if (!salon.lark_app_id || !salon.lark_app_secret || !salon.lark_bitable_app_token || !salon.lark_customer_table_id) {
+    return c.json({ error: "Lark API設定が不足しています", customers: [] }, 200);
+  }
+
+  try {
+    const customers = await fetchCustomerList(
+      salon.lark_app_id,
+      salon.lark_app_secret,
+      salon.lark_bitable_app_token,
+      salon.lark_customer_table_id
+    );
+    return c.json({ customers });
+  } catch (err: any) {
+    console.error("Customer list fetch error:", err.message);
+    return c.json({ error: err.message, customers: [] }, 200);
+  }
+});
+
+// ---------- Photo Upload ----------
+app.post("/salons/:slug/upload-photo", async (c) => {
+  const db = c.env.SALON_DB;
+  const slug = c.req.param("slug");
+
+  const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
+
+  if (!salon.lark_app_id || !salon.lark_app_secret) {
+    return c.json({ error: "Lark API設定が不足しています" }, 400);
+  }
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file") as File | null;
+    if (!file) {
+      return c.json({ error: "ファイルが選択されていません" }, 400);
+    }
+
+    // Validate file type
+    const allowedTypes = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"];
+    if (!allowedTypes.includes(file.type)) {
+      return c.json({ error: "対応していないファイル形式です（JPEG, PNG, GIF, WebP, HEICのみ）" }, 400);
+    }
+
+    // Validate file size (max 10MB)
+    if (file.size > 10 * 1024 * 1024) {
+      return c.json({ error: "ファイルサイズが大きすぎます（最大10MB）" }, 400);
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    const fileToken = await uploadFileToLark(
+      salon.lark_app_id,
+      salon.lark_app_secret,
+      arrayBuffer,
+      file.name,
+      file.type
+    );
+
+    return c.json({ success: true, fileToken });
+  } catch (err: any) {
+    console.error("Photo upload error:", err.message);
+    return c.json({ error: err.message || "写真のアップロードに失敗しました" }, 500);
+  }
+});
+
 // ---------- Public Form Routes ----------
 app.get("/form/:slug", async (c) => {
   const db = c.env.SALON_DB;
@@ -326,7 +503,7 @@ app.post("/form/:slug/submit", async (c) => {
   const db = c.env.SALON_DB;
   const slug = c.req.param("slug");
 
-  let body: { formType: string; formData: Record<string, unknown> };
+  let body: { formType: string; formData: Record<string, unknown>; photoTokens?: string[] };
   try {
     body = await c.req.json();
   } catch (e) {
@@ -375,6 +552,14 @@ app.post("/form/:slug/submit", async (c) => {
   if (salon.lark_app_id && salon.lark_app_secret && salon.lark_bitable_app_token && tableId) {
     try {
       const larkFields = mapFormDataToLarkFields(body.formData as Record<string, unknown>, body.formType);
+
+      // Handle photo attachments for karte
+      if (body.formType === "karte" && body.photoTokens && body.photoTokens.length > 0) {
+        larkFields["写真"] = body.photoTokens.map((token: string) => ({
+          file_token: token,
+        }));
+      }
+
       console.log("Lark fields to sync:", JSON.stringify(larkFields));
       const larkResult = await createBitableRecord(
         salon.lark_app_id, salon.lark_app_secret,
