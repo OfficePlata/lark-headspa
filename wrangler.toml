@@ -13,7 +13,7 @@ pages_build_output_dir = "dist"
 [[d1_databases]]
 binding = "SALON_DB"
 database_name = "salon-db"
-database_id = "<YOUR_D1_DATABASE_ID>"
+database_id = "5b0712fd-89f5-424e-a03d-8715a45e2385"
 
 # ============================================================
 # 環境変数（Cloudflare Dashboard > Pages > Settings > Environment Variables で設定）
