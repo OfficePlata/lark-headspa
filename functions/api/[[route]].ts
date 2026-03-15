@@ -274,6 +274,33 @@ function mapFormDataToLarkFields(
     // Skip photo fields - they are handled separately via file upload
     if (fieldType === "photo" || larkFieldType === "Attachment") continue;
 
+    // DuplexLink (双方向関連) → requires array of record_id strings
+    // customer_lookup sends JSON: {"recordId":"recXXX","customerNo":"C-004","name":"..."}
+    if (larkFieldType === "DuplexLink" || fieldType === "customer_lookup") {
+      try {
+        let recordId: string | null = null;
+        if (typeof value === "string") {
+          // Try to parse as JSON (from customer_lookup component)
+          try {
+            const parsed = JSON.parse(value);
+            recordId = parsed.recordId || null;
+          } catch {
+            // Not JSON — might be a raw record ID
+            if (typeof value === "string" && value.startsWith("rec")) {
+              recordId = value;
+            }
+          }
+        }
+        if (recordId) {
+          // DuplexLink expects an object with link_record_ids array
+          larkFields[larkFieldName] = { link_record_ids: [recordId] };
+        }
+      } catch (e) {
+        console.error("DuplexLink parse error:", e);
+      }
+      continue;
+    }
+
     // Date values → millisecond timestamps
     if (larkFieldType === "DateTime" || (typeof value === "string" && /^\d{4}[-/]\d{2}[-/]\d{2}$/.test(value))) {
       const dateStr = typeof value === "string" ? value.replace(/\//g, "-") : String(value);
