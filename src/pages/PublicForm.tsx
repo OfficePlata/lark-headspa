@@ -63,7 +63,7 @@ function CustomerLookupField({
   borderRadius,
   placeholder,
 }: {
-  value: string;
+  value: string; // JSON: {"recordId":"xxx","customerNo":"C-004","name":"山田 太郎"}
   onChange: (val: string) => void;
   slug: string;
   colors: Record<string, string>;
@@ -111,7 +111,15 @@ function CustomerLookupField({
     );
   });
 
-  const selectedCustomer = customers.find((c) => c.customerNo === value);
+  // Parse the stored JSON value
+  let parsedValue: { recordId?: string; customerNo?: string; name?: string } = {};
+  try {
+    if (value) parsedValue = JSON.parse(value);
+  } catch { /* not JSON, ignore */ }
+  const selectedRecordId = parsedValue.recordId || "";
+  const selectedDisplay = parsedValue.customerNo
+    ? `${parsedValue.customerNo} - ${parsedValue.name || ""}`
+    : "";
 
   return (
     <div ref={ref} className="relative">
@@ -123,13 +131,11 @@ function CustomerLookupField({
           background: colors.inputBg,
           border: `1px solid ${open ? colors.inputFocus : colors.inputBorder}`,
           borderRadius,
-          color: value ? colors.text : colors.textMuted,
+          color: selectedDisplay ? colors.text : colors.textMuted,
         }}
       >
         <span className="truncate">
-          {selectedCustomer
-            ? `${selectedCustomer.customerNo} - ${selectedCustomer.name}`
-            : placeholder || "顧客を選択"}
+          {selectedDisplay || placeholder || "顧客を選択"}
         </span>
         {loading ? (
           <Loader2 className="w-4 h-4 animate-spin flex-shrink-0" style={{ color: colors.textMuted }} />
@@ -197,20 +203,24 @@ function CustomerLookupField({
                   key={c.recordId}
                   type="button"
                   onClick={() => {
-                    onChange(c.customerNo);
+                    onChange(JSON.stringify({
+                      recordId: c.recordId,
+                      customerNo: c.customerNo,
+                      name: c.name,
+                    }));
                     setOpen(false);
                     setSearch("");
                   }}
                   className="w-full px-4 py-3 text-left flex items-center justify-between transition-colors text-sm"
                   style={{
-                    background: value === c.customerNo ? `${colors.primary}10` : "transparent",
+                    background: selectedRecordId === c.recordId ? `${colors.primary}10` : "transparent",
                     color: colors.text,
                   }}
                   onMouseEnter={(e) => {
-                    if (value !== c.customerNo) e.currentTarget.style.background = colors.surfaceHover || `${colors.primary}05`;
+                    if (selectedRecordId !== c.recordId) e.currentTarget.style.background = colors.surfaceHover || `${colors.primary}05`;
                   }}
                   onMouseLeave={(e) => {
-                    e.currentTarget.style.background = value === c.customerNo ? `${colors.primary}10` : "transparent";
+                    e.currentTarget.style.background = selectedRecordId === c.recordId ? `${colors.primary}10` : "transparent";
                   }}
                 >
                   <div>
@@ -218,7 +228,7 @@ function CustomerLookupField({
                     <span className="mx-2" style={{ color: colors.border }}>|</span>
                     <span>{c.name}</span>
                   </div>
-                  {value === c.customerNo && (
+                  {selectedRecordId === c.recordId && (
                     <Check className="w-4 h-4 flex-shrink-0" style={{ color: colors.primary }} />
                   )}
                 </button>
@@ -484,9 +494,10 @@ export default function PublicForm() {
         if (result.larkSynced) {
           toast.success("送信完了 - Lark BASEに保存されました");
         } else {
-          toast.success("送信完了");
+          toast.warning("送信完了（D1保存済み）");
           if (result.syncError) {
-            console.warn("Lark sync warning:", result.syncError);
+            toast.error(`Lark同期エラー: ${result.syncError}`, { duration: 8000 });
+            console.error("Lark sync error:", result.syncError);
           }
         }
       }
