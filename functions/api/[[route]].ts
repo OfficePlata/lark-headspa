@@ -472,6 +472,54 @@ app.put("/salons/:id", async (c) => {
 });
 
 // ---------- Customer List (for customer_lookup field) ----------
+
+// ---------- Debug: Lark Table Fields ----------
+app.get("/salons/:slug/lark-fields", async (c) => {
+  const db = c.env.SALON_DB;
+  const slug = c.req.param("slug");
+  const tableType = c.req.query("table") || "karte"; // karte, customer, monthly_goal, yearly_goal
+
+  const salon = await db.prepare("SELECT * FROM salons WHERE slug = ? AND is_active = 1").bind(slug).first<Salon>();
+  if (!salon) return c.json({ error: "サロンが見つかりません" }, 404);
+
+  if (!salon.lark_app_id || !salon.lark_app_secret || !salon.lark_bitable_app_token) {
+    return c.json({ error: "Lark API設定が不足しています" }, 400);
+  }
+
+  const tableIdMap: Record<string, string | null> = {
+    customer: salon.lark_customer_table_id,
+    monthly_goal: salon.lark_monthly_goal_table_id,
+    yearly_goal: salon.lark_yearly_goal_table_id,
+    karte: salon.lark_karte_table_id,
+  };
+  const tableId = tableIdMap[tableType];
+  if (!tableId) return c.json({ error: `テーブルID未設定: ${tableType}` }, 400);
+
+  try {
+    const token = await getTenantAccessToken(salon.lark_app_id, salon.lark_app_secret);
+    const res = await fetch(
+      `https://open.larksuite.com/open-apis/bitable/v1/apps/${salon.lark_bitable_app_token}/tables/${tableId}/fields?page_size=100`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    const data = await res.json() as any;
+    if (data.code !== 0) {
+      return c.json({ error: data.msg, code: data.code }, 500);
+    }
+
+    const fields = (data.data?.items || []).map((f: any) => ({
+      field_name: f.field_name,
+      type: f.type,
+      ui_type: f.ui_type,
+      is_primary: f.is_primary || false,
+      property: f.property || null,
+    }));
+
+    return c.json({ tableType, tableId, fields });
+  } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
 app.get("/salons/:slug/customers", async (c) => {
   const db = c.env.SALON_DB;
   const slug = c.req.param("slug");
