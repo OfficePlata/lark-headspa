@@ -327,7 +327,6 @@ function PhotoUploadField({
         type="file"
         accept="image/*"
         multiple
-        capture="environment"
         className="hidden"
         onChange={(e) => {
           if (e.target.files && e.target.files.length > 0) {
