@@ -234,7 +234,7 @@ export const DEFAULT_FORM_CONFIGS = {
   karte: {
     title: "カルテデータ入力フォーム",
     fields: [
-      { fieldName: "顧客No", fieldLabel: "顧客No.（顧客を選択）", fieldType: "customer_lookup", placeholder: "顧客を検索・選択", isRequired: true, larkFieldName: "顧客No", larkFieldType: "Text" },
+      { fieldName: "顧客No", fieldLabel: "顧客No.（顧客を選択）", fieldType: "customer_lookup", placeholder: "顧客を検索・選択", isRequired: true, larkFieldName: "顧客No", larkFieldType: "DuplexLink" },
       { fieldName: "顧客区分", fieldLabel: "顧客区分", fieldType: "select", options: ["新規", "既存"], placeholder: "オプションを選択", isRequired: true, larkFieldName: "顧客区分", larkFieldType: "SingleSelect" },
       { fieldName: "来店日", fieldLabel: "来店日", fieldType: "date", placeholder: "年/月/日", isRequired: true, larkFieldName: "来店日", larkFieldType: "DateTime" },
       { fieldName: "施術コース", fieldLabel: "施術コース", fieldType: "multiselect", options: ["ヘッドスパ60分", "ヘッドスパ90分", "ヘッドスパ120分", "カット", "カラー", "トリートメント"], placeholder: "該当するものを選択", isRequired: true, larkFieldName: "施術コース", larkFieldType: "MultiSelect" },
