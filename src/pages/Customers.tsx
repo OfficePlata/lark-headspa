@@ -14,21 +14,22 @@ import { toast } from "sonner";
 import {
   ArrowLeft,
   ChevronRight,
-  LogOut,
   Plus,
   Search,
   Users,
   X,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import { useAuthSession } from "@/lib/auth-context";
+import { useTheme } from "@/lib/auth-context";
+import AppShell from "@/components/AppShell";
 import { VISIT_TRIGGERS } from "../../shared/types";
 import type { Customer, CustomerInput, VisitTrigger } from "../../shared/types";
+import type { ThemeConfig } from "../../shared/themes";
 
 type SortKey = "recent" | "lastName" | "customerNo";
 
 export default function Customers() {
-  const { session, logout } = useAuthSession();
+  const theme = useTheme();
   const [, setLocation] = useLocation();
 
   // 検索条件
@@ -96,25 +97,23 @@ export default function Customers() {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: "#FAF7F2" }}>
-      <Header
-        salonName={session.tenant.salonName}
-        userDisplayName={session.user.displayName}
-        onLogout={() => logout()}
-      />
-
+    <AppShell subtitle="顧客台帳" activeNav="customers">
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* ページタイトル */}
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
             <Link
               href="/dashboard"
-              className="text-slate-500 hover:text-slate-900 inline-flex items-center gap-1 text-sm"
+              className="hover:underline inline-flex items-center gap-1 text-sm"
+              style={{ color: theme.colors.textMuted }}
             >
-              <ArrowLeft className="w-4 h-4" /> ダッシュボード
+              <ArrowLeft className="w-4 h-4" /> ホーム
             </Link>
-            <span className="text-slate-300">/</span>
-            <h1 className="text-xl font-semibold text-slate-800 inline-flex items-center gap-2">
+            <span style={{ color: theme.colors.border }}>/</span>
+            <h1
+              className="text-xl font-semibold inline-flex items-center gap-2"
+              style={{ color: theme.colors.text, fontFamily: theme.fonts.heading }}
+            >
               <Users className="w-5 h-5" />
               顧客台帳
             </h1>
@@ -122,7 +121,7 @@ export default function Customers() {
           <button
             onClick={() => setShowCreate(true)}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90"
-            style={{ background: "#8B7355" }}
+            style={{ background: theme.colors.primary }}
           >
             <Plus className="w-4 h-4" />
             新規登録
@@ -130,7 +129,7 @@ export default function Customers() {
         </div>
 
         {/* 検索バー */}
-        <div className="bg-white rounded-2xl p-4 mb-4 border" style={{ borderColor: "#E8DFD0" }}>
+        <div className="bg-white rounded-2xl p-4 mb-4 border" style={{ borderColor: theme.colors.border }}>
           <form onSubmit={applySearch} className="flex flex-wrap gap-3 items-end">
             <div className="flex-1 min-w-[220px]">
               <label className="block text-xs text-slate-500 mb-1">
@@ -221,7 +220,7 @@ export default function Customers() {
             <button
               onClick={() => setShowCreate(true)}
               className="block mx-auto mt-3 px-4 py-1.5 rounded-lg text-white text-sm"
-              style={{ background: "#8B7355" }}
+              style={{ background: theme.colors.primary }}
             >
               新規登録する
             </button>
@@ -257,66 +256,14 @@ export default function Customers() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-// ── ヘッダー (Dashboard と同じ構成) ──
-function Header({
-  salonName,
-  userDisplayName,
-  onLogout,
-}: {
-  salonName: string;
-  userDisplayName: string;
-  onLogout: () => void;
-}) {
-  return (
-    <header className="border-b bg-white" style={{ borderColor: "#E8DFD0" }}>
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-        <Link href="/dashboard" className="flex items-center gap-3 min-w-0">
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "#8B7355" }}
-          >
-            <Users className="w-4 h-4 text-white" />
-          </div>
-          <div className="flex flex-col leading-tight min-w-0">
-            <span
-              className="text-base font-bold truncate"
-              style={{ fontFamily: "'Noto Serif JP', serif", color: "#3D3226" }}
-            >
-              {salonName}
-            </span>
-            <span className="text-xs text-slate-500 truncate">顧客台帳</span>
-          </div>
-        </Link>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
-            <div className="w-6 h-6 rounded-full bg-slate-300 text-white text-xs font-semibold flex items-center justify-center">
-              {userDisplayName.slice(0, 1)}
-            </div>
-            <span className="text-xs text-slate-700 max-w-[10rem] truncate">
-              {userDisplayName}
-            </span>
-          </div>
-          <button
-            onClick={onLogout}
-            title="ログアウト"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition"
-          >
-            <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">ログアウト</span>
-          </button>
-        </div>
-      </div>
-    </header>
+    </AppShell>
   );
 }
 
 function CenteredMessage({ children }: { children: React.ReactNode }) {
+  const theme = useTheme();
   return (
-    <div className="text-center py-16 text-slate-500 bg-white rounded-2xl border" style={{ borderColor: "#E8DFD0" }}>
+    <div className="text-center py-16 text-slate-500 bg-white rounded-2xl border" style={{ borderColor: theme.colors.border }}>
       {children}
     </div>
   );
@@ -330,8 +277,9 @@ function CustomerTable({
   items: Customer[];
   onRowClick: (c: Customer) => void;
 }) {
+  const theme = useTheme();
   return (
-    <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: "#E8DFD0" }}>
+    <div className="bg-white rounded-2xl border overflow-hidden" style={{ borderColor: theme.colors.border }}>
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
           <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
@@ -427,6 +375,7 @@ function CreateModal({
     kana: "",
     phone: "",
   });
+  const theme = useTheme();
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -596,7 +545,7 @@ function CreateModal({
               type="submit"
               disabled={!canSubmit}
               className="px-4 py-2 rounded-lg text-sm font-medium text-white disabled:opacity-50"
-              style={{ background: "#8B7355" }}
+              style={{ background: theme.colors.primary }}
             >
               {submitting ? "登録中…" : "登録"}
             </button>

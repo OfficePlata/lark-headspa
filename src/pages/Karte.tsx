@@ -13,18 +13,15 @@ import {
   ChevronRight,
   ClipboardList,
   Image as ImageIcon,
-  LogOut,
   Plus,
   Search,
-  Users,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAuthSession } from "@/lib/auth-context";
+import AppShell from "@/components/AppShell";
 import { CUSTOMER_KIND, TREATMENT_COURSES } from "../../shared/types";
 import type { CustomerKind, Karte, TreatmentCourse } from "../../shared/types";
 
 export default function KartePage() {
-  const { session, logout } = useAuthSession();
   const [, setLocation] = useLocation();
 
   // 検索条件
@@ -90,13 +87,7 @@ export default function KartePage() {
   }
 
   return (
-    <div className="min-h-screen" style={{ background: "#FAF7F2" }}>
-      <Header
-        salonName={session.tenant.salonName}
-        userDisplayName={session.user.displayName}
-        onLogout={() => logout()}
-      />
-
+    <AppShell subtitle="カルテ" activeNav="karte">
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-6">
           <div className="flex items-center gap-3">
@@ -115,7 +106,7 @@ export default function KartePage() {
           <Link
             href="/karte/new"
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90"
-            style={{ background: "#8B7355" }}
+            style={{ background: "var(--theme-primary)" }}
           >
             <Plus className="w-4 h-4" />
             新規カルテ
@@ -125,7 +116,7 @@ export default function KartePage() {
         {/* 検索バー */}
         <div
           className="bg-white rounded-2xl p-4 mb-4 border"
-          style={{ borderColor: "#E8DFD0" }}
+          style={{ borderColor: "var(--theme-border)" }}
         >
           <form onSubmit={applySearch} className="flex flex-wrap gap-3 items-end">
             <div className="flex-1 min-w-[220px]">
@@ -223,7 +214,7 @@ export default function KartePage() {
             <Link
               href="/karte/new"
               className="block mx-auto mt-3 px-4 py-1.5 rounded-lg text-white text-sm w-fit"
-              style={{ background: "#8B7355" }}
+              style={{ background: "var(--theme-primary)" }}
             >
               新規カルテを追加
             </Link>
@@ -247,7 +238,7 @@ export default function KartePage() {
           </div>
         )}
       </div>
-    </div>
+    </AppShell>
   );
 }
 
@@ -261,7 +252,7 @@ function KarteTable({
   return (
     <div
       className="bg-white rounded-2xl border overflow-hidden"
-      style={{ borderColor: "#E8DFD0" }}
+      style={{ borderColor: "var(--theme-border)" }}
     >
       <div className="overflow-x-auto">
         <table className="min-w-full text-sm">
@@ -272,6 +263,7 @@ function KarteTable({
               <th className="px-4 py-3 text-left">顧客名</th>
               <th className="px-4 py-3 text-left">区分</th>
               <th className="px-4 py-3 text-left">施術コース</th>
+              <th className="px-4 py-3 text-left min-w-[20rem]">施術コメント</th>
               <th className="px-4 py-3 text-right">総支払額</th>
               <th className="px-4 py-3 text-left">写真</th>
               <th className="px-4 py-3" />
@@ -307,6 +299,15 @@ function KarteTable({
                           </span>
                         ))}
                   </div>
+                </td>
+                <td className="px-4 py-3 text-slate-700 text-xs max-w-md">
+                  {k.treatmentComment ? (
+                    <p className="line-clamp-2 leading-relaxed whitespace-pre-wrap">
+                      {k.treatmentComment}
+                    </p>
+                  ) : (
+                    <span className="text-slate-300">—</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-right text-slate-700 whitespace-nowrap">
                   {k.totalAmount !== null
@@ -357,68 +358,10 @@ function CenteredMessage({ children }: { children: React.ReactNode }) {
   return (
     <div
       className="text-center py-16 text-slate-500 bg-white rounded-2xl border"
-      style={{ borderColor: "#E8DFD0" }}
+      style={{ borderColor: "var(--theme-border)" }}
     >
       {children}
     </div>
   );
 }
 
-function Header({
-  salonName,
-  userDisplayName,
-  onLogout,
-}: {
-  salonName: string;
-  userDisplayName: string;
-  onLogout: () => void;
-}) {
-  return (
-    <header className="border-b bg-white" style={{ borderColor: "#E8DFD0" }}>
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-        <Link href="/dashboard" className="flex items-center gap-3 min-w-0">
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "#8B7355" }}
-          >
-            <ClipboardList className="w-4 h-4 text-white" />
-          </div>
-          <div className="flex flex-col leading-tight min-w-0">
-            <span
-              className="text-base font-bold truncate"
-              style={{ fontFamily: "'Noto Serif JP', serif", color: "#3D3226" }}
-            >
-              {salonName}
-            </span>
-            <span className="text-xs text-slate-500 truncate">カルテ</span>
-          </div>
-        </Link>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <Link
-            href="/customers"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
-          >
-            <Users className="w-4 h-4" />
-            顧客台帳
-          </Link>
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
-            <div className="w-6 h-6 rounded-full bg-slate-300 text-white text-xs font-semibold flex items-center justify-center">
-              {userDisplayName.slice(0, 1)}
-            </div>
-            <span className="text-xs text-slate-700 max-w-[10rem] truncate">
-              {userDisplayName}
-            </span>
-          </div>
-          <button
-            onClick={onLogout}
-            title="ログアウト"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition"
-          >
-            <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">ログアウト</span>
-          </button>
-        </div>
-      </div>
-    </header>
-  );
-}

@@ -10,18 +10,15 @@ import {
   ArrowLeft,
   ArrowUpRight,
   CalendarDays,
-  ClipboardList,
-  LogOut,
   Target,
   TrendingUp,
   Users,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAuthSession } from "@/lib/auth-context";
+import AppShell from "@/components/AppShell";
 import type { MonthlyGoal, SalesAnalytics, YearlyGoal } from "../../shared/types";
 
 export default function Goals() {
-  const { session, logout } = useAuthSession();
   const [yearly, setYearly] = useState<YearlyGoal[]>([]);
   const [monthly, setMonthly] = useState<MonthlyGoal[]>([]);
   const [analytics, setAnalytics] = useState<SalesAnalytics[]>([]);
@@ -83,13 +80,7 @@ export default function Goals() {
   );
 
   return (
-    <div className="min-h-screen" style={{ background: "#FAF7F2" }}>
-      <Header
-        salonName={session.tenant.salonName}
-        userDisplayName={session.user.displayName}
-        onLogout={() => logout()}
-      />
-
+    <AppShell subtitle="目標" activeNav="goals">
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -141,7 +132,7 @@ export default function Goals() {
           </>
         )}
       </div>
-    </div>
+    </AppShell>
   );
 }
 
@@ -157,7 +148,7 @@ function YearlySummary({
     return (
       <section
         className="bg-white rounded-2xl border p-6 flex items-center justify-between"
-        style={{ borderColor: "#E8DFD0" }}
+        style={{ borderColor: "var(--theme-border)" }}
       >
         <div>
           <div className="text-xs text-slate-500 mb-1">{fallbackYear} 年度</div>
@@ -169,7 +160,7 @@ function YearlySummary({
         <Link
           href="/goals/yearly"
           className="px-4 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90"
-          style={{ background: "#8B7355" }}
+          style={{ background: "var(--theme-primary)" }}
         >
           年間目標を作成
         </Link>
@@ -180,7 +171,7 @@ function YearlySummary({
   return (
     <section
       className="bg-white rounded-2xl border p-6"
-      style={{ borderColor: "#E8DFD0" }}
+      style={{ borderColor: "var(--theme-border)" }}
     >
       <div className="flex items-center justify-between mb-5">
         <div>
@@ -236,7 +227,7 @@ function CurrentMonthSection({
   return (
     <section
       className="bg-white rounded-2xl border p-6"
-      style={{ borderColor: "#E8DFD0" }}
+      style={{ borderColor: "var(--theme-border)" }}
     >
       <div className="flex items-center justify-between mb-5">
         <div>
@@ -356,7 +347,7 @@ function Last12MonthsSection({
   return (
     <section
       className="bg-white rounded-2xl border overflow-hidden"
-      style={{ borderColor: "#E8DFD0" }}
+      style={{ borderColor: "var(--theme-border)" }}
     >
       <header className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
         <span className="text-sm font-semibold text-slate-700 inline-flex items-center gap-2">
@@ -493,75 +484,10 @@ function CenteredCard({ children }: { children: React.ReactNode }) {
   return (
     <div
       className="text-center py-16 text-slate-500 bg-white rounded-2xl border"
-      style={{ borderColor: "#E8DFD0" }}
+      style={{ borderColor: "var(--theme-border)" }}
     >
       {children}
     </div>
   );
 }
 
-function Header({
-  salonName,
-  userDisplayName,
-  onLogout,
-}: {
-  salonName: string;
-  userDisplayName: string;
-  onLogout: () => void;
-}) {
-  return (
-    <header className="border-b bg-white" style={{ borderColor: "#E8DFD0" }}>
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-        <Link href="/dashboard" className="flex items-center gap-3 min-w-0">
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
-            style={{ background: "#8B7355" }}
-          >
-            <Target className="w-4 h-4 text-white" />
-          </div>
-          <div className="flex flex-col leading-tight min-w-0">
-            <span
-              className="text-base font-bold truncate"
-              style={{ fontFamily: "'Noto Serif JP', serif", color: "#3D3226" }}
-            >
-              {salonName}
-            </span>
-            <span className="text-xs text-slate-500 truncate">目標</span>
-          </div>
-        </Link>
-        <div className="flex items-center gap-2 sm:gap-3">
-          <Link
-            href="/customers"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
-          >
-            <Users className="w-4 h-4" />
-            顧客台帳
-          </Link>
-          <Link
-            href="/karte"
-            className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
-          >
-            <ClipboardList className="w-4 h-4" />
-            カルテ
-          </Link>
-          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
-            <div className="w-6 h-6 rounded-full bg-slate-300 text-white text-xs font-semibold flex items-center justify-center">
-              {userDisplayName.slice(0, 1)}
-            </div>
-            <span className="text-xs text-slate-700 max-w-[10rem] truncate">
-              {userDisplayName}
-            </span>
-          </div>
-          <button
-            onClick={onLogout}
-            title="ログアウト"
-            className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition"
-          >
-            <LogOut className="w-4 h-4" />
-            <span className="hidden sm:inline">ログアウト</span>
-          </button>
-        </div>
-      </div>
-    </header>
-  );
-}

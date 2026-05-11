@@ -2277,8 +2277,71 @@ app.post("/staff/:id/reset-password", async (c) => {
 });
 
 // ============================================================
+// 自分のアカウント (Phase B-2 補強)
+// ============================================================
+
+// ── 自分のパスワード変更 ──
+//   ログイン中ユーザーが自分のパスワードを変更する。
+//   現パスワード検証 → 新パスワード適用 → 「自分の現セッションは保持」「他端末セッションは破棄」
+app.post("/me/change-password", async (c) => {
+  const env = c.env as Env;
+  const currentToken = readSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (!currentToken) {
+    return c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "未認証"), 401);
+  }
+  const session = await getSession(env, currentToken);
+  if (!session) {
+    return c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "セッション無効"), 401);
+  }
+
+  let body: { currentPassword?: string; newPassword?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  if (!body.currentPassword || !body.newPassword) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "現在/新パスワード両方を入力してください"), 400);
+  }
+  if (body.newPassword.length < 8) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "新パスワードは8文字以上", "newPassword"), 400);
+  }
+  if (body.currentPassword === body.newPassword) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "新パスワードは現在と異なる必要があります"), 400);
+  }
+
+  const me = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE id = ? AND is_active = 1 LIMIT 1`
+  )
+    .bind(session.user_id)
+    .first<UserRow>();
+  if (!me) return c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "ユーザー無効"), 401);
+
+  if (!(await verifyPassword(body.currentPassword, me.password_hash))) {
+    return c.json(err(ERROR_CODES.AUTH_INVALID_CREDENTIALS, "現在のパスワードが正しくありません", "currentPassword"), 401);
+  }
+
+  const newHash = await hashPassword(body.newPassword);
+  await env.SALON_DB.prepare(
+    `UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?`
+  )
+    .bind(newHash, me.id)
+    .run();
+
+  // 他端末のセッションは破棄、自分の現セッションは保持
+  await env.SALON_DB.prepare(
+    `DELETE FROM sessions WHERE user_id = ? AND token != ?`
+  )
+    .bind(me.id, currentToken)
+    .run();
+
+  return c.json(ok({ changedAt: new Date().toISOString() }));
+});
+
+// ============================================================
 // Export for Cloudflare Pages Functions
 // ============================================================
 export const onRequest: PagesFunction<Env> = async (context) => {
-  return app.fetch(context.request, context.env, context.ctx);
+  // Cloudflare Pages Functions の context は executionContext 形式
+  return app.fetch(context.request, context.env, context as unknown as ExecutionContext);
 };

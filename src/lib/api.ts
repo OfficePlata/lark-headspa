@@ -323,6 +323,17 @@ export const api = {
       unwrap(requestWithEnvelope<{ items: SalesAnalytics[] }>("/analytics")),
   },
 
+  // ── 自分のアカウント ──
+  me: {
+    changePassword: (currentPassword: string, newPassword: string) =>
+      unwrap(
+        requestWithEnvelope<{ changedAt: string }>("/me/change-password", {
+          method: "POST",
+          body: JSON.stringify({ currentPassword, newPassword }),
+        })
+      ),
+  },
+
   // ── Phase B-2: スタッフ管理 (加盟店オーナーが自店舗のスタッフをCRUD) ──
   staff: {
     list: () => unwrap(requestWithEnvelope<{ items: StaffUser[] }>("/staff")),

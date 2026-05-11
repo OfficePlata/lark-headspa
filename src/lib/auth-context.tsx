@@ -4,14 +4,21 @@
  * - <AuthGuard> で囲んだ子ツリーは、認証済みでなければ /login にリダイレクト
  * - useAuthSession() でログイン中のユーザー / テナント情報にアクセス
  */
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useLocation } from "wouter";
 import { api } from "./api";
+import { getTheme, type ThemeConfig } from "../../shared/themes";
 import type { SessionInfo } from "../../shared/types";
 
 interface AuthContextValue {
   session: SessionInfo;
+  theme: ThemeConfig;
   logout: () => Promise<void>;
+}
+
+/** ログイン中のテナント themeId から ThemeConfig を取得 */
+export function useTheme(): ThemeConfig {
+  return useAuthSession().theme;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -68,8 +75,10 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     // すでに /login へリダイレクト中
     return null;
   }
+  const theme = useMemo(() => getTheme(session.tenant.themeId), [session.tenant.themeId]);
+
   return (
-    <AuthContext.Provider value={{ session, logout }}>
+    <AuthContext.Provider value={{ session, theme, logout }}>
       {children}
     </AuthContext.Provider>
   );
