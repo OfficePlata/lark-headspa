@@ -22,16 +22,49 @@ import type {
 } from "../../shared/types";
 
 const API_BASE = "/api";
+const TENANT_STORAGE_KEY = "salon_crm_tenant";
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+/**
+ * URL クエリ ?tenant=xxx を見つけたら localStorage にも保存し、
+ * 以降の API リクエストには X-Tenant-Slug ヘッダーで送る。
+ * （Cloudflare Pages の単一ドメイン運用で、画面遷移後もテナントを保持するため）
+ */
+function readTenantSlug(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get("tenant");
+    if (fromUrl) {
+      window.localStorage.setItem(TENANT_STORAGE_KEY, fromUrl);
+      return fromUrl;
+    }
+    return window.localStorage.getItem(TENANT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function clearTenantSlug(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(TENANT_STORAGE_KEY);
+  } catch {}
+}
+
+function withTenantHeader(init?: RequestInit): RequestInit {
+  const tenant = readTenantSlug();
+  return {
     credentials: "include",
-    ...options,
+    ...init,
     headers: {
       "Content-Type": "application/json",
-      ...options?.headers,
+      ...(tenant ? { "X-Tenant-Slug": tenant } : {}),
+      ...init?.headers,
     },
-  });
+  };
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, withTenantHeader(options));
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: res.statusText }));
@@ -43,14 +76,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 /** 新 API 形式 ({ok:true,data} | {ok:false,error}) 専用 */
 async function requestWithEnvelope<T>(path: string, options?: RequestInit): Promise<ApiResponse<T>> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    credentials: "include",
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
-    },
-  });
+  const res = await fetch(`${API_BASE}${path}`, withTenantHeader(options));
   return res.json() as Promise<ApiResponse<T>>;
 }
 
@@ -227,9 +253,11 @@ export const api = {
     uploadPhoto: async (file: File): Promise<{ fileToken: string; name: string }> => {
       const fd = new FormData();
       fd.append("file", file);
+      const tenant = readTenantSlug();
       const res = await fetch(`${API_BASE}/karte/upload-photo`, {
         method: "POST",
         credentials: "include",
+        headers: tenant ? { "X-Tenant-Slug": tenant } : {},
         body: fd,
       });
       const data = (await res.json()) as ApiResponse<{ fileToken: string; name: string }>;
