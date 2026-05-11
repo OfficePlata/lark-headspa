@@ -5,15 +5,82 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { THEMES, THEME_LIST, getTheme, DEFAULT_FORM_CONFIGS, FORM_TYPES, LARK_READONLY_FIELDS } from "../../shared/themes";
+import type { TenantInfo, SessionInfo } from "../../shared/types";
+import { ERROR_CODES } from "../../shared/types";
+import {
+  buildClearCookie,
+  buildSessionCookie,
+  clearLoginFailures,
+  createSession,
+  deleteSession,
+  getSession,
+  isLockedOut,
+  readSessionTokenFromCookie,
+  recordLoginFailure,
+  verifyPassword,
+  type AuthEnv,
+  type UserRow,
+} from "../../src/lib/auth";
+import {
+  resolveTenant,
+  toLarkConfig,
+  toTenantInfo,
+  type SalonRow,
+} from "../../src/lib/tenant";
+import { LarkClient } from "../../src/lib/lark-client";
+import {
+  buildSearchBody,
+  customerInputToFields,
+  fieldsToCustomer,
+  validateCustomerInput,
+} from "../../src/lib/customer-mapper";
+import {
+  buildKarteSearchBody,
+  fieldsToKarte,
+  karteInputToFields,
+  validateKarteInput,
+} from "../../src/lib/karte-mapper";
+import {
+  fieldsToYearlyGoal,
+  fieldsToMonthlyGoal,
+  fieldsToSalesAnalytics,
+  yearlyGoalInputToFields,
+  monthlyGoalInputToFields,
+  validateYearlyGoalInput,
+  validateMonthlyGoalInput,
+} from "../../src/lib/goals-mapper";
+import type {
+  CustomerInput,
+  CustomerListResult,
+  Customer,
+  KarteInput,
+  KarteListResult,
+  Karte,
+  YearlyGoal,
+  YearlyGoalInput,
+  MonthlyGoal,
+  MonthlyGoalInput,
+  SalesAnalytics,
+} from "../../shared/types";
 
 // ============================================================
 // Types
 // ============================================================
 interface Env {
   SALON_DB: D1Database;
+  KV: KVNamespace;
   LARK_APP_ID?: string;
   LARK_APP_SECRET?: string;
   AUTH_SECRET?: string;
+  LARK_DOMAIN?: string;
+}
+
+// ── 共通ヘルパー: API レスポンス整形 ──
+function ok<T>(data: T) {
+  return { ok: true as const, data };
+}
+function err(code: string, message: string, field?: string) {
+  return { ok: false as const, error: { code, message, ...(field ? { field } : {}) } };
 }
 
 interface Salon {
@@ -747,6 +814,821 @@ app.get("/form-types", (c) => {
     title: DEFAULT_FORM_CONFIGS[ft].title,
     fieldCount: DEFAULT_FORM_CONFIGS[ft].fields.length,
   })));
+});
+
+// ============================================================
+// 認証・テナント API (Phase 0-1)
+// ============================================================
+
+// ── 軽量: ログイン画面の店舗名表示用 ──
+app.get("/tenant-info", async (c) => {
+  const tenant = await resolveTenant(c.env as AuthEnv & Env, {
+    host: c.req.header("Host") || null,
+    query: c.req.query("tenant"),
+    header: c.req.header("X-Tenant-Slug"),
+  });
+  if (!tenant) {
+    return c.json(err(ERROR_CODES.AUTH_TENANT_NOT_FOUND, "テナントが見つかりません"), 404);
+  }
+  return c.json(ok<TenantInfo>(toTenantInfo(tenant)));
+});
+
+// ── ログイン ──
+app.post("/auth/login", async (c) => {
+  const env = c.env as Env;
+  let body: { email?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式です"), 400);
+  }
+
+  const email = (body.email || "").trim().toLowerCase();
+  const password = body.password || "";
+  if (!email || !password) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "メールとパスワードを入力してください"), 400);
+  }
+
+  // テナント解決
+  const tenant = await resolveTenant(env, {
+    host: c.req.header("Host") || null,
+    query: c.req.query("tenant"),
+    header: c.req.header("X-Tenant-Slug"),
+  });
+  if (!tenant) {
+    return c.json(err(ERROR_CODES.AUTH_TENANT_NOT_FOUND, "テナントが見つかりません"), 404);
+  }
+
+  // ロックアウト判定
+  if (await isLockedOut(env, email)) {
+    return c.json(err(ERROR_CODES.AUTH_LOCKED, "失敗回数の上限に達しました。10分後に再試行してください"), 429);
+  }
+
+  const user = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE salon_id = ? AND email = ? AND is_active = 1 LIMIT 1`
+  )
+    .bind(tenant.id, email)
+    .first<UserRow>();
+
+  const ip = c.req.header("CF-Connecting-IP") || c.req.header("X-Forwarded-For") || null;
+  const userAgent = c.req.header("User-Agent") || null;
+
+  if (!user || !(await verifyPassword(password, user.password_hash))) {
+    const count = await recordLoginFailure(env, email, tenant.id, ip, userAgent);
+    const code = count >= 5 ? ERROR_CODES.AUTH_LOCKED : ERROR_CODES.AUTH_INVALID_CREDENTIALS;
+    return c.json(err(code, "メールアドレスまたはパスワードが正しくありません"), 401);
+  }
+
+  // 成功
+  await clearLoginFailures(env, email);
+  const session = await createSession(env, user.id, tenant.id, userAgent);
+
+  await env.SALON_DB.prepare(`UPDATE users SET last_login_at = datetime('now') WHERE id = ?`)
+    .bind(user.id)
+    .run();
+
+  const isHttps = (c.req.header("X-Forwarded-Proto") || "").toLowerCase() === "https" ||
+    (c.req.url.startsWith("https://"));
+  c.header("Set-Cookie", buildSessionCookie(session.token, isHttps));
+
+  const sessionInfo: SessionInfo = {
+    user: {
+      id: user.id,
+      salonId: user.salon_id,
+      email: user.email,
+      displayName: user.display_name,
+      role: user.role,
+    },
+    tenant: toTenantInfo(tenant),
+    expiresAt: session.expiresAt.toISOString(),
+  };
+  return c.json(ok(sessionInfo));
+});
+
+// ── ログアウト ──
+app.post("/auth/logout", async (c) => {
+  const env = c.env as Env;
+  const token = readSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (token) {
+    await deleteSession(env, token);
+  }
+  const isHttps = (c.req.header("X-Forwarded-Proto") || "").toLowerCase() === "https" ||
+    c.req.url.startsWith("https://");
+  c.header("Set-Cookie", buildClearCookie(isHttps));
+  return c.json(ok({ loggedOut: true }));
+});
+
+// ── 認証必須ガード: セッション→テナント→LarkClient まで一括で解決 ──
+type AuthContext = {
+  session: { user_id: number; salon_id: number };
+  salon: SalonRow;
+  client: LarkClient;
+  customerTableId: string;
+  karteTableId: string;
+  tables: {
+    customer: string;
+    karte: string;
+    monthlyGoal: string;
+    yearlyGoal: string;
+    sales: string;
+  };
+};
+
+async function requireAuthWithLark(
+  c: any
+): Promise<{ ok: true; ctx: AuthContext } | { ok: false; response: Response }> {
+  const env = c.env as Env;
+  const token = readSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (!token) {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "未認証です"), 401),
+    };
+  }
+  const session = await getSession(env, token);
+  if (!session) {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "セッションが無効です"), 401),
+    };
+  }
+  const salon = await env.SALON_DB.prepare(`SELECT * FROM salons WHERE id = ? LIMIT 1`)
+    .bind(session.salon_id)
+    .first<SalonRow>();
+  if (!salon) {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_TENANT_NOT_FOUND, "テナントが見つかりません"), 401),
+    };
+  }
+  const config = toLarkConfig(salon);
+  if (!config) {
+    return {
+      ok: false,
+      response: c.json(
+        err(ERROR_CODES.VALIDATION_ERROR, "サロンの Lark 設定が未完了です。ダッシュボードで Lark App ID / Secret / Bitable App Token を設定してください"),
+        400
+      ),
+    };
+  }
+  if (!config.tables.customer) {
+    return {
+      ok: false,
+      response: c.json(
+        err(ERROR_CODES.VALIDATION_ERROR, "顧客テーブル ID (lark_customer_table_id) が未設定です"),
+        400
+      ),
+    };
+  }
+  const client = LarkClient.fromConfig(env, config);
+  return {
+    ok: true,
+    ctx: {
+      session: { user_id: session.user_id, salon_id: session.salon_id },
+      salon,
+      client,
+      customerTableId: config.tables.customer,
+      karteTableId: config.tables.karte,
+      tables: config.tables,
+    },
+  };
+}
+
+// ── セッション取得 ──
+app.get("/auth/session", async (c) => {
+  const env = c.env as Env;
+  const token = readSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (!token) {
+    return c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "未認証です"), 401);
+  }
+  const session = await getSession(env, token);
+  if (!session) {
+    return c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "セッションが無効です"), 401);
+  }
+
+  const user = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE id = ? AND is_active = 1 LIMIT 1`
+  )
+    .bind(session.user_id)
+    .first<UserRow>();
+  if (!user) {
+    return c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "ユーザーが無効化されています"), 401);
+  }
+
+  const salon = await env.SALON_DB.prepare(
+    `SELECT * FROM salons WHERE id = ? LIMIT 1`
+  )
+    .bind(session.salon_id)
+    .first<SalonRow>();
+  if (!salon) {
+    return c.json(err(ERROR_CODES.AUTH_TENANT_NOT_FOUND, "テナントが無効化されています"), 401);
+  }
+
+  const sessionInfo: SessionInfo = {
+    user: {
+      id: user.id,
+      salonId: user.salon_id,
+      email: user.email,
+      displayName: user.display_name,
+      role: user.role,
+    },
+    tenant: toTenantInfo(salon),
+    expiresAt: session.expires_at,
+  };
+  return c.json(ok(sessionInfo));
+});
+
+// ============================================================
+// 顧客台帳 API (Phase 2)
+//   実 BASE: 新規顧客データ (tblaxZtrnk0jwBjB)
+// ============================================================
+
+// ── 一覧 (キーワード検索 / 性別 / 来店のきっかけ / 並び順 / ページネーション) ──
+app.get("/customers", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, customerTableId } = auth.ctx;
+
+  const q = (c.req.query("q") || "").trim();
+  const gender = (c.req.query("gender") || "").trim();
+  const visitTrigger = (c.req.query("visitTrigger") || "").trim();
+  const sort = (c.req.query("sort") || "recent").trim();
+  const pageToken = c.req.query("pageToken") || undefined;
+  const pageSizeRaw = Number(c.req.query("pageSize") || "50");
+  const pageSize = Number.isFinite(pageSizeRaw)
+    ? Math.min(Math.max(pageSizeRaw, 1), 100)
+    : 50;
+
+  const searchBody = buildSearchBody({
+    q: q || undefined,
+    gender: gender === "男性" || gender === "女性" ? gender : undefined,
+    visitTrigger: (["紹介", "instagram", "TikTok", "ホットペッパー"].includes(visitTrigger)
+      ? visitTrigger
+      : undefined) as any,
+    sort: (["recent", "lastName", "customerNo"].includes(sort) ? sort : "recent") as any,
+  });
+
+  try {
+    // page_size と page_token はクエリ文字列で渡す
+    const params = new URLSearchParams({ page_size: String(pageSize) });
+    if (pageToken) params.set("page_token", pageToken);
+
+    // LarkClient の search は path にクエリを乗せないので、低レベル fetch を使う
+    const token = await client.getTenantAccessToken();
+    const domain = (c.env as Env).LARK_DOMAIN || "open.larksuite.com";
+    const url = `https://${domain}/open-apis/bitable/v1/apps/${auth.ctx.salon.lark_bitable_app_token}/tables/${customerTableId}/records/search?${params}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(searchBody),
+    });
+    const data = (await res.json()) as {
+      code: number;
+      msg?: string;
+      data?: { items?: Array<{ record_id: string; fields: Record<string, unknown> }>; has_more?: boolean; page_token?: string };
+    };
+    if (data.code !== 0) {
+      return c.json(err(ERROR_CODES.LARK_API_ERROR, data.msg || "Lark search failed"), 502);
+    }
+    const items: Customer[] = (data.data?.items || []).map((r) =>
+      fieldsToCustomer(r.record_id, r.fields)
+    );
+    const result: CustomerListResult = {
+      items,
+      hasMore: !!data.data?.has_more,
+      pageToken: data.data?.page_token,
+    };
+    return c.json(ok(result));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 詳細 ──
+app.get("/customers/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, customerTableId } = auth.ctx;
+  const recordId = c.req.param("recordId");
+
+  try {
+    const record = await client.getRecord(customerTableId, recordId);
+    if (!record) {
+      return c.json(err(ERROR_CODES.NOT_FOUND, "顧客が見つかりません"), 404);
+    }
+    return c.json(ok(fieldsToCustomer(record.record_id, record.fields)));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 新規登録 ──
+app.post("/customers", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, customerTableId } = auth.ctx;
+
+  let body: CustomerInput;
+  try {
+    body = (await c.req.json()) as CustomerInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式です"), 400);
+  }
+  const validation = validateCustomerInput(body);
+  if (validation) return c.json(err(ERROR_CODES.VALIDATION_ERROR, validation), 400);
+
+  try {
+    const fields = customerInputToFields(body);
+    const created = await client.createRecord(customerTableId, fields);
+    return c.json(ok(fieldsToCustomer(created.record_id, created.fields)), 201);
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 編集 ──
+app.put("/customers/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, customerTableId } = auth.ctx;
+  const recordId = c.req.param("recordId");
+
+  let body: Partial<CustomerInput>;
+  try {
+    body = (await c.req.json()) as Partial<CustomerInput>;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式です"), 400);
+  }
+  // PUT では姓・名はオプショナル扱いにする（完全な置換ではなくパッチ的更新）
+  if (body.lastName !== undefined && !body.lastName.trim())
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "姓は空にできません", "lastName"), 400);
+  if (body.firstName !== undefined && !body.firstName.trim())
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "名前は空にできません", "firstName"), 400);
+  if (body.birthday && !/^\d{4}-\d{2}-\d{2}$/.test(body.birthday))
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "生年月日は yyyy-MM-dd 形式で", "birthday"), 400);
+  if (body.firstVisitDate && !/^\d{4}-\d{2}-\d{2}$/.test(body.firstVisitDate))
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "来店日は yyyy-MM-dd 形式で", "firstVisitDate"), 400);
+
+  try {
+    // CustomerInput を満たすように既存値で穴埋め
+    const baseFields = customerInputToFields({
+      lastName: body.lastName ?? "",
+      firstName: body.firstName ?? "",
+      kana: body.kana,
+      gender: body.gender,
+      phone: body.phone,
+      birthday: body.birthday,
+      visitTriggers: body.visitTriggers,
+      firstVisitDate: body.firstVisitDate,
+    });
+    // 未指定の必須は送らない
+    if (body.lastName === undefined) delete baseFields["姓"];
+    if (body.firstName === undefined) delete baseFields["名前"];
+
+    const updated = await client.updateRecord(customerTableId, recordId, baseFields);
+    return c.json(ok(fieldsToCustomer(updated.record_id, updated.fields)));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ============================================================
+// カルテ API (Phase 3)
+//   実 BASE: カルテデータ (tbl4Crds3zemyxUp)
+// ============================================================
+
+// ── 一覧 ──
+app.get("/karte", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, karteTableId, salon } = auth.ctx;
+  if (!karteTableId) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "カルテテーブル ID が未設定です"), 400);
+  }
+
+  const customerRecordId = c.req.query("customerRecordId") || undefined;
+  const customerName = c.req.query("customerName") || undefined;
+  const customerKind = c.req.query("customerKind") || undefined;
+  const treatmentCourse = c.req.query("treatmentCourse") || undefined;
+  const visitDateFrom = c.req.query("visitDateFrom") || undefined;
+  const visitDateTo = c.req.query("visitDateTo") || undefined;
+  const pageToken = c.req.query("pageToken") || undefined;
+  const pageSizeRaw = Number(c.req.query("pageSize") || "50");
+  const pageSize = Number.isFinite(pageSizeRaw)
+    ? Math.min(Math.max(pageSizeRaw, 1), 100)
+    : 50;
+
+  const searchBody = buildKarteSearchBody({
+    customerRecordId,
+    customerName,
+    customerKind: customerKind === "新規" || customerKind === "既存" ? customerKind : undefined,
+    treatmentCourse: treatmentCourse as any,
+    visitDateFrom,
+    visitDateTo,
+  });
+
+  try {
+    const params = new URLSearchParams({ page_size: String(pageSize) });
+    if (pageToken) params.set("page_token", pageToken);
+
+    const token = await client.getTenantAccessToken();
+    const domain = (c.env as Env).LARK_DOMAIN || "open.larksuite.com";
+    const url = `https://${domain}/open-apis/bitable/v1/apps/${salon.lark_bitable_app_token}/tables/${karteTableId}/records/search?${params}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify(searchBody),
+    });
+    const data = (await res.json()) as any;
+    if (data.code !== 0) {
+      return c.json(err(ERROR_CODES.LARK_API_ERROR, data.msg || "Lark search failed"), 502);
+    }
+    const items: Karte[] = (data.data?.items || []).map((r: any) =>
+      attachPhotoUrls(fieldsToKarte(r.record_id, r.fields))
+    );
+    const result: KarteListResult = {
+      items,
+      hasMore: !!data.data?.has_more,
+      pageToken: data.data?.page_token,
+    };
+    return c.json(ok(result));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 詳細 ──
+app.get("/karte/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, karteTableId } = auth.ctx;
+  const recordId = c.req.param("recordId");
+
+  try {
+    const record = await client.getRecord(karteTableId, recordId);
+    if (!record) {
+      return c.json(err(ERROR_CODES.NOT_FOUND, "カルテが見つかりません"), 404);
+    }
+    return c.json(ok(attachPhotoUrls(fieldsToKarte(record.record_id, record.fields))));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 新規 ──
+app.post("/karte", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, karteTableId } = auth.ctx;
+
+  let body: KarteInput;
+  try {
+    body = (await c.req.json()) as KarteInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式です"), 400);
+  }
+  const validation = validateKarteInput(body);
+  if (validation) return c.json(err(ERROR_CODES.VALIDATION_ERROR, validation), 400);
+
+  try {
+    const fields = karteInputToFields(body);
+    const created = await client.createRecord(karteTableId, fields);
+    return c.json(ok(attachPhotoUrls(fieldsToKarte(created.record_id, created.fields))), 201);
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 編集 ──
+app.put("/karte/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client, karteTableId } = auth.ctx;
+  const recordId = c.req.param("recordId");
+
+  let body: Partial<KarteInput>;
+  try {
+    body = (await c.req.json()) as Partial<KarteInput>;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式です"), 400);
+  }
+  if (body.visitDate && !/^\d{4}-\d{2}-\d{2}$/.test(body.visitDate))
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "来店日は yyyy-MM-dd 形式で", "visitDate"), 400);
+
+  try {
+    // 更新: customerRecordId が指定されていれば顧客No も差し替え
+    const fields = karteInputToFields({
+      customerRecordId: body.customerRecordId ?? "",
+      customerKind: body.customerKind,
+      visitDate: body.visitDate,
+      treatmentCourses: body.treatmentCourses,
+      treatmentComment: body.treatmentComment,
+      treatmentAmount: body.treatmentAmount,
+      productAmount: body.productAmount,
+      paymentMethods: body.paymentMethods,
+      photoFileTokens: body.photoFileTokens,
+    });
+    if (!body.customerRecordId) delete fields["顧客No"];
+
+    const updated = await client.updateRecord(karteTableId, recordId, fields);
+    return c.json(ok(attachPhotoUrls(fieldsToKarte(updated.record_id, updated.fields))));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 写真アップロード ──
+//   FormData の "file" に画像を含める。返り値の fileToken を KarteInput.photoFileTokens に
+//   詰めて POST/PUT /karte に渡すと、カルテレコードの「写真」フィールドに紐付く。
+app.post("/karte/upload-photo", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { salon, client } = auth.ctx;
+
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get("file") as unknown as File | null;
+    if (!file) {
+      return c.json(err(ERROR_CODES.VALIDATION_ERROR, "ファイルが選択されていません"), 400);
+    }
+    const allowed = ["image/jpeg", "image/png", "image/gif", "image/webp", "image/heic"];
+    if (!allowed.includes(file.type)) {
+      return c.json(err(ERROR_CODES.VALIDATION_ERROR, "対応形式は JPEG / PNG / GIF / WebP / HEIC のみです"), 400);
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      return c.json(err(ERROR_CODES.VALIDATION_ERROR, "ファイルサイズが大きすぎます（最大10MB）"), 400);
+    }
+
+    const token = await client.getTenantAccessToken();
+    const domain = (c.env as Env).LARK_DOMAIN || "open.larksuite.com";
+    const upstream = new FormData();
+    const blob = new Blob([await file.arrayBuffer()], { type: file.type });
+    upstream.append("file", blob, file.name);
+    upstream.append("file_name", file.name);
+    upstream.append("parent_type", "bitable_image");
+    upstream.append("parent_node", salon.lark_bitable_app_token!);
+    upstream.append("size", String(file.size));
+
+    const res = await fetch(`https://${domain}/open-apis/drive/v1/medias/upload_all`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: upstream,
+    });
+    const data = (await res.json()) as any;
+    if (data.code !== 0) {
+      return c.json(err(ERROR_CODES.LARK_API_ERROR, data.msg || "Lark upload failed"), 502);
+    }
+    return c.json(ok({ fileToken: data.data?.file_token as string, name: file.name }));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "写真アップロード失敗"), 502);
+  }
+});
+
+// ── 写真プロキシ (Lark の一時 URL にリダイレクト) ──
+app.get("/karte/photo/:fileToken", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client } = auth.ctx;
+  const fileToken = c.req.param("fileToken");
+
+  try {
+    const token = await client.getTenantAccessToken();
+    const domain = (c.env as Env).LARK_DOMAIN || "open.larksuite.com";
+    const url = `https://${domain}/open-apis/drive/v1/medias/batch_get_tmp_download_url?file_tokens=${encodeURIComponent(fileToken)}`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const data = (await res.json()) as any;
+    if (data.code !== 0) {
+      return c.json(err(ERROR_CODES.LARK_API_ERROR, data.msg || "URL取得失敗"), 502);
+    }
+    const tmpUrl: string | undefined = data.data?.tmp_download_urls?.[0]?.tmp_download_url;
+    if (!tmpUrl) {
+      return c.json(err(ERROR_CODES.NOT_FOUND, "写真が見つかりません"), 404);
+    }
+    // 一時URLにリダイレクト (ブラウザの <img src> で使える)
+    return c.redirect(tmpUrl, 302);
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "写真取得失敗"), 502);
+  }
+});
+
+/** Karte の photos に /api/karte/photo/{token} 形式の URL を埋める */
+function attachPhotoUrls(karte: Karte): Karte {
+  return {
+    ...karte,
+    photos: karte.photos.map((p) => ({
+      ...p,
+      url: `/api/karte/photo/${encodeURIComponent(p.fileToken)}`,
+    })),
+  };
+}
+
+// ============================================================
+// 目標 / 売上分析 API (Phase 4)
+//   年間目標 (tblABnUfoY8XMaD0) / 月間目標 (tblhOI7T3lu5T7xM) / 売上・分析 (tbl2ZzvKO8q5NEh7)
+// ============================================================
+
+/** Lark Bitable のテーブル全件を page_token 回しながら取得 */
+async function listAllRecords(
+  client: LarkClient,
+  tableId: string,
+  pageSize = 100
+): Promise<Array<{ record_id: string; fields: Record<string, unknown> }>> {
+  const all: Array<{ record_id: string; fields: Record<string, unknown> }> = [];
+  let pageToken: string | undefined;
+  let safety = 50;
+  do {
+    const data = await client.listRecords(tableId, { pageSize, pageToken });
+    all.push(...((data.items as any) || []));
+    pageToken = data.has_more ? data.page_token : undefined;
+    safety--;
+  } while (pageToken && safety > 0);
+  return all;
+}
+
+// ── 年間目標: 一覧 ──
+app.get("/goals/yearly", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.yearlyGoal;
+  if (!tableId) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "年間目標テーブル ID が未設定です"), 400);
+  }
+  try {
+    const records = await listAllRecords(auth.ctx.client, tableId);
+    const items: YearlyGoal[] = records.map((r) => fieldsToYearlyGoal(r.record_id, r.fields));
+    // 年度 desc で並べる
+    items.sort((a, b) => (a.fiscalYear < b.fiscalYear ? 1 : a.fiscalYear > b.fiscalYear ? -1 : 0));
+    return c.json(ok({ items }));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 年間目標: 詳細 ──
+app.get("/goals/yearly/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.yearlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "年間目標テーブル ID 未設定"), 400);
+  try {
+    const r = await auth.ctx.client.getRecord(tableId, c.req.param("recordId"));
+    if (!r) return c.json(err(ERROR_CODES.NOT_FOUND, "年間目標が見つかりません"), 404);
+    return c.json(ok(fieldsToYearlyGoal(r.record_id, r.fields)));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 年間目標: 新規 ──
+app.post("/goals/yearly", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.yearlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "年間目標テーブル ID 未設定"), 400);
+  let body: YearlyGoalInput;
+  try {
+    body = (await c.req.json()) as YearlyGoalInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  const v = validateYearlyGoalInput(body);
+  if (v) return c.json(err(ERROR_CODES.VALIDATION_ERROR, v), 400);
+  try {
+    const created = await auth.ctx.client.createRecord(tableId, yearlyGoalInputToFields(body));
+    return c.json(ok(fieldsToYearlyGoal(created.record_id, created.fields)), 201);
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 年間目標: 編集 ──
+app.put("/goals/yearly/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.yearlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "年間目標テーブル ID 未設定"), 400);
+  let body: Partial<YearlyGoalInput>;
+  try {
+    body = (await c.req.json()) as Partial<YearlyGoalInput>;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  try {
+    const fields = yearlyGoalInputToFields({
+      fiscalYear: body.fiscalYear ?? "",
+      revenueTarget: body.revenueTarget,
+      averageSpend: body.averageSpend,
+      note: body.note,
+    });
+    if (body.fiscalYear === undefined) delete fields["年度"];
+
+    const updated = await auth.ctx.client.updateRecord(tableId, c.req.param("recordId"), fields);
+    return c.json(ok(fieldsToYearlyGoal(updated.record_id, updated.fields)));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 月間目標: 一覧 ──
+app.get("/goals/monthly", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.monthlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "月間目標テーブル ID 未設定"), 400);
+  try {
+    const records = await listAllRecords(auth.ctx.client, tableId);
+    const items: MonthlyGoal[] = records.map((r) => fieldsToMonthlyGoal(r.record_id, r.fields));
+    items.sort((a, b) => (a.yearMonth < b.yearMonth ? 1 : a.yearMonth > b.yearMonth ? -1 : 0));
+    return c.json(ok({ items }));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 月間目標: 詳細 ──
+app.get("/goals/monthly/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.monthlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "月間目標テーブル ID 未設定"), 400);
+  try {
+    const r = await auth.ctx.client.getRecord(tableId, c.req.param("recordId"));
+    if (!r) return c.json(err(ERROR_CODES.NOT_FOUND, "月間目標が見つかりません"), 404);
+    return c.json(ok(fieldsToMonthlyGoal(r.record_id, r.fields)));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 月間目標: 新規 ──
+app.post("/goals/monthly", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.monthlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "月間目標テーブル ID 未設定"), 400);
+  let body: MonthlyGoalInput;
+  try {
+    body = (await c.req.json()) as MonthlyGoalInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  const v = validateMonthlyGoalInput(body);
+  if (v) return c.json(err(ERROR_CODES.VALIDATION_ERROR, v), 400);
+  try {
+    const created = await auth.ctx.client.createRecord(tableId, monthlyGoalInputToFields(body));
+    return c.json(ok(fieldsToMonthlyGoal(created.record_id, created.fields)), 201);
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 月間目標: 編集 ──
+app.put("/goals/monthly/:recordId", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.monthlyGoal;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "月間目標テーブル ID 未設定"), 400);
+  let body: Partial<MonthlyGoalInput>;
+  try {
+    body = (await c.req.json()) as Partial<MonthlyGoalInput>;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  try {
+    const fields = monthlyGoalInputToFields({
+      yearMonth: body.yearMonth ?? "",
+      revenueTarget: body.revenueTarget,
+      workingDaysTarget: body.workingDaysTarget,
+      averageSpend: body.averageSpend,
+    });
+    if (body.yearMonth === undefined) delete fields["年月"];
+
+    const updated = await auth.ctx.client.updateRecord(tableId, c.req.param("recordId"), fields);
+    return c.json(ok(fieldsToMonthlyGoal(updated.record_id, updated.fields)));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── 売上・分析 (読み取り専用) ──
+app.get("/analytics", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const tableId = auth.ctx.tables.sales;
+  if (!tableId) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "売上・分析テーブル ID 未設定"), 400);
+  try {
+    const records = await listAllRecords(auth.ctx.client, tableId);
+    const items: SalesAnalytics[] = records.map((r) =>
+      fieldsToSalesAnalytics(r.record_id, r.fields)
+    );
+    items.sort((a, b) => (a.yearMonth < b.yearMonth ? 1 : a.yearMonth > b.yearMonth ? -1 : 0));
+    return c.json(ok({ items }));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
 });
 
 // ============================================================

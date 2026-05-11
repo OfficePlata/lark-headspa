@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
+import { Link } from "wouter";
 import {
   Plus, Settings, Eye, Palette, History, ChevronRight,
-  Loader2, ExternalLink, Copy, Check, X
+  Loader2, ExternalLink, Copy, Check, X, LogOut, Users, ClipboardList, Target
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useAuthSession } from "@/lib/auth-context";
 import { THEMES, THEME_LIST, type ThemeConfig } from "@shared/themes";
 
 // ============================================================
@@ -32,6 +34,7 @@ type Tab = "overview" | "theme" | "lark" | "submissions";
 // Dashboard
 // ============================================================
 export default function Dashboard() {
+  const { session, logout } = useAuthSession();
   const [salons, setSalons] = useState<Salon[]>([]);
   const [selectedSalon, setSelectedSalon] = useState<Salon | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -55,23 +58,65 @@ export default function Dashboard() {
     <div className="min-h-screen" style={{ background: "#FAF7F2" }}>
       {/* Header */}
       <header className="border-b bg-white" style={{ borderColor: "#E8DFD0" }}>
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <a href="/" className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full flex items-center justify-center" style={{ background: "#8B7355" }}>
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+          <a href="/" className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: "#8B7355" }}>
               <Settings className="w-4 h-4 text-white" />
             </div>
-            <span className="text-lg font-bold" style={{ fontFamily: "'Noto Serif JP', serif", color: "#3D3226" }}>
-              管理画面
-            </span>
+            <div className="flex flex-col leading-tight min-w-0">
+              <span className="text-base font-bold truncate" style={{ fontFamily: "'Noto Serif JP', serif", color: "#3D3226" }}>
+                {session.tenant.salonName}
+              </span>
+              <span className="text-xs text-slate-500 truncate">管理画面</span>
+            </div>
           </a>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors hover:opacity-90"
-            style={{ background: "#8B7355" }}
-          >
-            <Plus className="w-4 h-4" />
-            サロン追加
-          </button>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link
+              href="/customers"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
+            >
+              <Users className="w-4 h-4" />
+              顧客台帳
+            </Link>
+            <Link
+              href="/karte"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
+            >
+              <ClipboardList className="w-4 h-4" />
+              カルテ
+            </Link>
+            <Link
+              href="/goals"
+              className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
+            >
+              <Target className="w-4 h-4" />
+              目標
+            </Link>
+            <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
+              <div className="w-6 h-6 rounded-full bg-slate-300 text-white text-xs font-semibold flex items-center justify-center">
+                {session.user.displayName.slice(0, 1)}
+              </div>
+              <span className="text-xs text-slate-700 max-w-[10rem] truncate">
+                {session.user.displayName}
+              </span>
+            </div>
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium transition-colors hover:opacity-90"
+              style={{ background: "#8B7355" }}
+            >
+              <Plus className="w-4 h-4" />
+              <span className="hidden sm:inline">サロン追加</span>
+            </button>
+            <button
+              onClick={() => logout()}
+              title="ログアウト"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition"
+            >
+              <LogOut className="w-4 h-4" />
+              <span className="hidden sm:inline">ログアウト</span>
+            </button>
+          </div>
         </div>
       </header>
 

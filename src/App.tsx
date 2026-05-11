@@ -3,6 +3,15 @@ import { Route, Switch } from "wouter";
 import Home from "./pages/Home";
 import PublicForm from "./pages/PublicForm";
 import Dashboard from "./pages/Dashboard";
+import Login from "./pages/Login";
+import Customers from "./pages/Customers";
+import CustomerDetail from "./pages/CustomerDetail";
+import KartePage from "./pages/Karte";
+import KarteDetail from "./pages/KarteDetail";
+import Goals from "./pages/Goals";
+import GoalsYearlyPage from "./pages/GoalsYearly";
+import GoalsMonthlyPage from "./pages/GoalsMonthly";
+import { AuthGuard } from "./lib/auth-context";
 
 function App() {
   return (
@@ -10,8 +19,48 @@ function App() {
       <Toaster position="top-center" richColors />
       <Switch>
         <Route path="/" component={Home} />
+        <Route path="/login" component={Login} />
         <Route path="/form/:slug" component={PublicForm} />
-        <Route path="/dashboard" component={Dashboard} />
+        <Route path="/dashboard">
+          <AuthGuard>
+            <Dashboard />
+          </AuthGuard>
+        </Route>
+        <Route path="/customers">
+          <AuthGuard>
+            <Customers />
+          </AuthGuard>
+        </Route>
+        <Route path="/customers/:recordId">
+          <AuthGuard>
+            <CustomerDetail />
+          </AuthGuard>
+        </Route>
+        <Route path="/karte">
+          <AuthGuard>
+            <KartePage />
+          </AuthGuard>
+        </Route>
+        <Route path="/karte/:recordId">
+          <AuthGuard>
+            <KarteDetail />
+          </AuthGuard>
+        </Route>
+        <Route path="/goals">
+          <AuthGuard>
+            <Goals />
+          </AuthGuard>
+        </Route>
+        <Route path="/goals/yearly">
+          <AuthGuard>
+            <GoalsYearlyPage />
+          </AuthGuard>
+        </Route>
+        <Route path="/goals/monthly">
+          <AuthGuard>
+            <GoalsMonthlyPage />
+          </AuthGuard>
+        </Route>
         <Route>
           <div className="min-h-screen flex items-center justify-center bg-background">
             <div className="text-center">

@@ -1,7 +1,137 @@
-# Lark HeadSpa - Salon Form System
+# Lark HeadSpa / サロンCRM プラットフォーム
 
-美容サロン向けの顧客情報入力フォームシステムです。  
-Lark Bitable APIと連携し、フォーム送信データを自動的にLark BASEに保存します。
+美容サロン向けのマルチテナント CRM + フォーム送信システム。  
+Lark Bitable を業務 DB として、Cloudflare Pages + D1 + KV をホストする。
+
+実 BASE 構造（5 テーブル）に準拠：
+
+| テーブル | 役割 |
+|---------|------|
+| 年間目標シート | 年度・売上目標・客単価・派生 KPI |
+| 月間目標シート | 年月・月間売上目標・稼働日数・派生 KPI |
+| 新規顧客データ | 顧客台帳（顧客No・氏名・性別・電話 等）↔ カルテと双方向リンク |
+| カルテデータ | 来店履歴・施術コース・支払金額・写真 |
+| 売上・分析 | 年月単位の Lookup/集計（総来店数・新規率・施術売上 等） |
+
+---
+
+## Phase 0-1: 認証付き CRM モードのセットアップ（ローカル開発）
+
+### 0. 前提条件
+
+- Node.js v18 以上
+- `pnpm` または `npm`
+- Cloudflare アカウントと `wrangler login` 済
+- Lark Open Platform でアプリ作成済（`LARK_APP_ID` / `LARK_APP_SECRET`）
+- 操作対象の Lark BASE: <https://yjpw4ydvu698.jp.larksuite.com/base/TC4QbGyrLarVFcsqmNIjrzmLp4f>
+
+### 1. 依存導入
+
+```bash
+pnpm install   # または npm install
+```
+
+### 2. リソース作成
+
+```bash
+# 既に作成済みなら飛ばす
+wrangler d1 create salon-db
+wrangler kv namespace create salon-kv
+```
+
+出力された `database_id` / KV `id` を `wrangler.toml` の該当箇所に貼り付ける。
+
+### 3. シークレット設定（ローカル）
+
+プロジェクト直下に `.dev.vars` を作成（git 追跡対象外）：
+
+```env
+AUTH_SECRET=任意の十分長いランダム文字列
+LARK_APP_ID=cli_xxxxxxxxxxxx
+LARK_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+### 4. マイグレーション
+
+```bash
+pnpm db:migrate:local
+# 内部で 0001_init.sql → 0002_auth.sql の順に流す
+```
+
+### 5. 初期データ投入
+
+```bash
+# .dev.vars の値を export してから実行
+export $(grep -v '^#' .dev.vars | xargs)
+export ADMIN_PASSWORD=お好きな管理者パスワード
+export TEST_USER_PASSWORD=お好きなスタッフパスワード
+
+pnpm seed:local
+```
+
+これで以下が投入される：
+
+| ロール | 識別子 |
+|-------|--------|
+| Platform 管理者 | `admin@officeplata.jp` / `$ADMIN_PASSWORD` |
+| サロン（テナント） | `Calmer 霧島店` / slug `calmer-kirishima` / app_token `TC4QbGyrLarVFcsqmNIjrzmLp4f` |
+| サロンスタッフ | `rumi@calmer-kirishima.localhost` / `$TEST_USER_PASSWORD` (role: owner) |
+
+### 6. 起動
+
+```bash
+pnpm build
+pnpm pages:dev   # http://localhost:8788
+```
+
+サブドメイン経由でアクセス：
+
+```
+http://calmer-kirishima.localhost:8788/login
+```
+
+`*.localhost` は macOS / Linux で自動的に `127.0.0.1` に解決される。  
+seed したテストユーザーでログインすると `/dashboard` に遷移する。
+
+### 7. テスト実行
+
+```bash
+pnpm test
+```
+
+`tests/auth.test.ts` と `tests/tenant.test.ts` がグリーンになる。
+
+---
+
+## 認証・テナント API（Phase 0-1）
+
+| メソッド | パス | 説明 |
+|---------|------|------|
+| GET  | `/api/tenant-info`   | Host から解決したテナント情報（ログイン画面の店舗名表示用） |
+| POST | `/api/auth/login`    | ログイン。`{email, password}` を JSON で送信、Cookie を返す |
+| POST | `/api/auth/logout`   | ログアウト。セッション破棄 + Cookie クリア |
+| GET  | `/api/auth/session`  | 現在のセッション情報。未認証なら 401 |
+
+レスポンスは指示書 5.1.2 節の `{ok:true,data}` / `{ok:false,error}` 形式。
+
+---
+
+## ディレクトリ構成（追加分）
+
+```
+├─ functions/api/[[route]].ts   ← 認証エンドポイントを追加済
+├─ src/
+│   ├─ lib/
+│   │   ├─ lark-client.ts       ← Bitable CRUD ラッパー（KVキャッシュ・リトライ付き）
+│   │   ├─ auth.ts              ← bcrypt + セッション + Cookie + 失敗カウント
+│   │   ├─ tenant.ts            ← Host → サロン解決
+│   │   └─ auth-context.tsx     ← React 認証ガード
+│   └─ pages/Login.tsx          ← ログイン画面
+├─ shared/types.ts              ← API 形式・テナント / セッション型
+├─ drizzle/migrations/0002_auth.sql  ← users / sessions / platform_admins
+├─ scripts/seed.mjs             ← 初期データ投入用 SQL ジェネレータ
+└─ tests/                       ← Vitest
+```
 
 ---
 
