@@ -403,6 +403,23 @@ export const api = {
         ),
     },
 
+    tenantUsers: {
+      list: (tenantId: number) =>
+        unwrap(
+          requestWithEnvelope<{ items: StaffUser[] }>(`/platform/tenants/${tenantId}/users`)
+        ),
+      create: (
+        tenantId: number,
+        input: { email: string; displayName: string; password: string; role?: "owner" | "staff" }
+      ) =>
+        unwrap(
+          requestWithEnvelope<StaffUser>(`/platform/tenants/${tenantId}/users`, {
+            method: "POST",
+            body: JSON.stringify(input),
+          })
+        ),
+    },
+
     /** Bitable App Token から 5 テーブル ID を自動判定する */
     inspectLarkTables: (params: {
       appToken: string;

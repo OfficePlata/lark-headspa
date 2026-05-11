@@ -2277,6 +2277,103 @@ app.post("/staff/:id/reset-password", async (c) => {
 });
 
 // ============================================================
+// Platform Admin: 加盟店スタッフ管理 (Phase B-1 補強)
+//   既存加盟店に Platform Admin が直接スタッフを追加できる
+// ============================================================
+
+app.get("/platform/tenants/:id/users", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+  const id = Number(c.req.param("id"));
+
+  const salon = await env.SALON_DB.prepare(`SELECT id FROM salons WHERE id = ?`)
+    .bind(id)
+    .first<{ id: number }>();
+  if (!salon) return c.json(err(ERROR_CODES.NOT_FOUND, "加盟店が見つかりません"), 404);
+
+  const rows = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE salon_id = ? ORDER BY is_active DESC, role DESC, created_at ASC`
+  )
+    .bind(id)
+    .all<UserRow>();
+  const items = (rows.results || []).map((r) => ({
+    id: r.id,
+    salonId: r.salon_id,
+    email: r.email,
+    displayName: r.display_name,
+    role: r.role,
+    isActive: !!r.is_active,
+    lastLoginAt: r.last_login_at,
+    createdAt: r.created_at,
+    isSelf: false,
+  }));
+  return c.json(ok({ items }));
+});
+
+app.post("/platform/tenants/:id/users", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+  const id = Number(c.req.param("id"));
+
+  const salon = await env.SALON_DB.prepare(`SELECT id FROM salons WHERE id = ?`)
+    .bind(id)
+    .first<{ id: number }>();
+  if (!salon) return c.json(err(ERROR_CODES.NOT_FOUND, "加盟店が見つかりません"), 404);
+
+  let body: { email?: string; displayName?: string; password?: string; role?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  const email = (body.email || "").trim().toLowerCase();
+  if (!email) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "メールは必須", "email"), 400);
+  if (!body.displayName?.trim()) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "表示名は必須", "displayName"), 400);
+  }
+  if (!body.password || body.password.length < 8) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "パスワードは8文字以上", "password"), 400);
+  }
+  const role = body.role === "staff" ? "staff" : "owner"; // Platform Admin 経由のデフォルトは owner
+
+  // 同 salon・同 email 重複
+  const dup = await env.SALON_DB.prepare(
+    `SELECT id FROM users WHERE salon_id = ? AND email = ?`
+  )
+    .bind(id, email)
+    .first<{ id: number }>();
+  if (dup) {
+    return c.json(err(ERROR_CODES.CONFLICT, "このメールは既に登録されています", "email"), 409);
+  }
+
+  const hash = await hashPassword(body.password);
+  const result = await env.SALON_DB.prepare(
+    `INSERT INTO users (salon_id, email, password_hash, display_name, role)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+    .bind(id, email, hash, body.displayName.trim(), role)
+    .run();
+  const newId = result.meta.last_row_id as number;
+
+  return c.json(
+    ok({
+      id: newId,
+      salonId: id,
+      email,
+      displayName: body.displayName.trim(),
+      role,
+      isActive: true,
+      lastLoginAt: null,
+      createdAt: new Date().toISOString(),
+      isSelf: false,
+    }),
+    201
+  );
+});
+
+// ============================================================
 // 自分のアカウント (Phase B-2 補強)
 // ============================================================
 

@@ -15,15 +15,18 @@ import {
   CheckCircle2,
   ExternalLink,
   LogOut,
+  Plus,
   Save,
   Search,
   ShieldCheck,
+  UserPlus,
   X,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { usePlatformAuthSession } from "@/lib/platform-auth-context";
 import type {
   BitableTablesInspection,
+  StaffUser,
   TenantDetail,
   TenantUpsertInput,
 } from "../../shared/types";
@@ -399,27 +402,31 @@ export default function PlatformTenantDetail() {
 
             {/* 編集時のアクション */}
             {!isNew && tenant && (
-              <Section title="加盟店オーナーへのアクセス">
-                <div className="flex items-center justify-between text-sm">
-                  <div>
-                    <div className="text-slate-700">
-                      オーナー {tenant.ownerCount} / 全スタッフ {tenant.staffCount}
+              <>
+                <Section title="加盟店オーナーへのアクセス">
+                  <div className="flex items-center justify-between text-sm">
+                    <div>
+                      <div className="text-slate-700">
+                        オーナー {tenant.ownerCount} / 全スタッフ {tenant.staffCount}
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1">
+                        加盟店オーナーは以下 URL でログインできます
+                      </div>
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      加盟店オーナーは以下 URL でログインできます
-                    </div>
+                    <a
+                      href={`/login?tenant=${tenant.slug}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+                    >
+                      /login?tenant={tenant.slug}
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
                   </div>
-                  <a
-                    href={`/login?tenant=${tenant.slug}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-blue-600 hover:underline"
-                  >
-                    /login?tenant={tenant.slug}
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
-                </div>
-              </Section>
+                </Section>
+
+                <TenantUsersSection tenantId={tenant.id} />
+              </>
             )}
 
             <div className="flex justify-end gap-2">
@@ -441,6 +448,237 @@ export default function PlatformTenantDetail() {
             </div>
           </form>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ── 加盟店スタッフ管理 (Platform Admin 経由) ──
+function TenantUsersSection({ tenantId }: { tenantId: number }) {
+  const [items, setItems] = useState<StaffUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  function reload() {
+    setLoading(true);
+    api.platform.tenantUsers
+      .list(tenantId)
+      .then((res) => {
+        setItems(res.items);
+        setError(null);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "スタッフ取得失敗"))
+      .finally(() => setLoading(false));
+  }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(reload, [tenantId]);
+
+  return (
+    <section className="bg-white rounded-2xl border border-slate-200 p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-slate-700">スタッフ一覧</h2>
+        <button
+          onClick={() => setCreating(true)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700"
+        >
+          <UserPlus className="w-3.5 h-3.5" />
+          スタッフを追加
+        </button>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-6 text-slate-400 text-sm">読み込み中…</div>
+      ) : error ? (
+        <div className="text-center py-6 text-red-600 text-sm">{error}</div>
+      ) : items.length === 0 ? (
+        <div className="text-center py-6 text-slate-400 text-sm">
+          スタッフがまだ登録されていません。最初の1人を追加してください。
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-slate-600 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="px-3 py-2 text-left">表示名</th>
+                <th className="px-3 py-2 text-left">メール</th>
+                <th className="px-3 py-2 text-left">ロール</th>
+                <th className="px-3 py-2 text-left">状態</th>
+                <th className="px-3 py-2 text-left">最終ログイン</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {items.map((s) => (
+                <tr key={s.id}>
+                  <td className="px-3 py-2 font-medium text-slate-800">{s.displayName}</td>
+                  <td className="px-3 py-2 text-slate-600">{s.email}</td>
+                  <td className="px-3 py-2">
+                    {s.role === "owner" ? (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                        オーナー
+                      </span>
+                    ) : (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                        スタッフ
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {s.isActive ? (
+                      <span className="text-xs text-emerald-700">有効</span>
+                    ) : (
+                      <span className="text-xs text-slate-400">無効</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-slate-500">
+                    {s.lastLoginAt ? new Date(s.lastLoginAt).toLocaleString("ja-JP") : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {creating && (
+        <TenantUserCreateModal
+          tenantId={tenantId}
+          onClose={() => setCreating(false)}
+          onCreated={() => {
+            setCreating(false);
+            reload();
+            toast.success("スタッフを追加しました。加盟店オーナーに認証情報を伝達してください");
+          }}
+        />
+      )}
+    </section>
+  );
+}
+
+function TenantUserCreateModal({
+  tenantId,
+  onClose,
+  onCreated,
+}: {
+  tenantId: number;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [form, setForm] = useState<{
+    email: string;
+    displayName: string;
+    password: string;
+    role: "owner" | "staff";
+  }>({ email: "", displayName: "", password: "", role: "owner" });
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  function set<K extends keyof typeof form>(key: K, value: (typeof form)[K]) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setErrorMsg(null);
+    if (!form.email.trim()) return setErrorMsg("メールは必須");
+    if (!form.displayName.trim()) return setErrorMsg("表示名は必須");
+    if (form.password.length < 8) return setErrorMsg("パスワードは8文字以上");
+    setSubmitting(true);
+    try {
+      await api.platform.tenantUsers.create(tenantId, form);
+      onCreated();
+    } catch (e) {
+      setErrorMsg(e instanceof ApiError || e instanceof Error ? e.message : "追加失敗");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="bg-white rounded-2xl w-full max-w-md shadow-xl overflow-hidden"
+      >
+        <header className="flex items-center justify-between px-6 py-4 border-b border-slate-200">
+          <h2 className="text-base font-semibold text-slate-800 inline-flex items-center gap-2">
+            <UserPlus className="w-4 h-4" />
+            スタッフを追加
+          </h2>
+          <button onClick={onClose} className="p-1 rounded hover:bg-slate-100">
+            <X className="w-4 h-4 text-slate-500" />
+          </button>
+        </header>
+        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+          {errorMsg && (
+            <div className="rounded-lg bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2">
+              {errorMsg}
+            </div>
+          )}
+          <Field label="メールアドレス" required>
+            <input
+              type="email"
+              required
+              value={form.email}
+              onChange={(e) => set("email", e.target.value)}
+              placeholder="owner@example.com"
+              className={inputCls}
+            />
+          </Field>
+          <Field label="表示名" required>
+            <input
+              type="text"
+              required
+              value={form.displayName}
+              onChange={(e) => set("displayName", e.target.value)}
+              placeholder="山田"
+              className={inputCls}
+            />
+          </Field>
+          <Field label="初期パスワード" required help="8文字以上。本人に伝達後、本人がリセット可能">
+            <input
+              type="text"
+              required
+              minLength={8}
+              value={form.password}
+              onChange={(e) => set("password", e.target.value)}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="ロール" help="初期オーナーは owner を選択">
+            <select
+              value={form.role}
+              onChange={(e) => set("role", e.target.value as "owner" | "staff")}
+              className={inputCls}
+            >
+              <option value="owner">オーナー (スタッフ管理も可)</option>
+              <option value="staff">スタッフ (通常)</option>
+            </select>
+          </Field>
+          <div className="flex justify-end gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-sm text-slate-600 border border-slate-300 hover:bg-slate-50"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              disabled={submitting}
+              className="flex items-center gap-2 px-5 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium hover:bg-slate-700 disabled:opacity-50"
+            >
+              <Plus className="w-4 h-4" />
+              {submitting ? "追加中…" : "追加"}
+            </button>
+          </div>
+        </form>
       </div>
     </div>
   );
