@@ -49,6 +49,17 @@ import {
   validateYearlyGoalInput,
   validateMonthlyGoalInput,
 } from "../../src/lib/goals-mapper";
+import {
+  buildPlatformClearCookie,
+  buildPlatformSessionCookie,
+  createPlatformSession,
+  deletePlatformSession,
+  getPlatformSession,
+  readPlatformSessionTokenFromCookie,
+  verifyPlatformPassword,
+  type PlatformAdminRow,
+} from "../../src/lib/platform-auth";
+import { hashPassword } from "../../src/lib/auth";
 import type {
   CustomerInput,
   CustomerListResult,
@@ -61,6 +72,12 @@ import type {
   MonthlyGoal,
   MonthlyGoalInput,
   SalesAnalytics,
+  PlatformAdmin,
+  PlatformSessionInfo,
+  TenantSummary,
+  TenantDetail,
+  TenantUpsertInput,
+  BitableTablesInspection,
 } from "../../shared/types";
 
 // ============================================================
@@ -1630,6 +1647,392 @@ app.get("/analytics", async (c) => {
     return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
   }
 });
+
+// ============================================================
+// Platform Admin API (Phase B-1)
+//   OFFICE PLATA 側ログイン + 加盟店 (テナント) CRUD + Lark テーブル自動判定
+// ============================================================
+
+// ── Platform Admin 認証ガード ──
+async function requirePlatformAuth(
+  c: any
+): Promise<{ ok: true; admin: PlatformAdminRow } | { ok: false; response: Response }> {
+  const env = c.env as Env;
+  const token = readPlatformSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (!token) {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "未認証です"), 401),
+    };
+  }
+  const session = await getPlatformSession(env, token);
+  if (!session) {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "セッションが無効です"), 401),
+    };
+  }
+  const admin = await env.SALON_DB.prepare(
+    `SELECT * FROM platform_admins WHERE id = ? AND is_active = 1 LIMIT 1`
+  )
+    .bind(session.admin_id)
+    .first<PlatformAdminRow>();
+  if (!admin) {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "管理者が無効化されています"), 401),
+    };
+  }
+  return { ok: true, admin };
+}
+
+// ── Platform Admin ログイン ──
+app.post("/platform/auth/login", async (c) => {
+  const env = c.env as Env;
+  let body: { email?: string; password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式です"), 400);
+  }
+  const email = (body.email || "").trim().toLowerCase();
+  const password = body.password || "";
+  if (!email || !password) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "メールとパスワードを入力してください"), 400);
+  }
+
+  const admin = await env.SALON_DB.prepare(
+    `SELECT * FROM platform_admins WHERE email = ? AND is_active = 1 LIMIT 1`
+  )
+    .bind(email)
+    .first<PlatformAdminRow>();
+
+  if (!admin || !(await verifyPlatformPassword(password, admin.password_hash))) {
+    return c.json(
+      err(ERROR_CODES.AUTH_INVALID_CREDENTIALS, "メールアドレスまたはパスワードが正しくありません"),
+      401
+    );
+  }
+
+  const userAgent = c.req.header("User-Agent") || null;
+  const session = await createPlatformSession(env, admin.id, userAgent);
+
+  await env.SALON_DB.prepare(
+    `UPDATE platform_admins SET last_login_at = datetime('now') WHERE id = ?`
+  )
+    .bind(admin.id)
+    .run();
+
+  const isHttps =
+    (c.req.header("X-Forwarded-Proto") || "").toLowerCase() === "https" ||
+    c.req.url.startsWith("https://");
+  c.header("Set-Cookie", buildPlatformSessionCookie(session.token, isHttps));
+
+  const info: PlatformSessionInfo = {
+    admin: { id: admin.id, email: admin.email, displayName: admin.display_name },
+    expiresAt: session.expiresAt.toISOString(),
+  };
+  return c.json(ok(info));
+});
+
+// ── Platform Admin ログアウト ──
+app.post("/platform/auth/logout", async (c) => {
+  const env = c.env as Env;
+  const token = readPlatformSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (token) await deletePlatformSession(env, token);
+  const isHttps =
+    (c.req.header("X-Forwarded-Proto") || "").toLowerCase() === "https" ||
+    c.req.url.startsWith("https://");
+  c.header("Set-Cookie", buildPlatformClearCookie(isHttps));
+  return c.json(ok({ loggedOut: true }));
+});
+
+// ── Platform Admin セッション取得 ──
+app.get("/platform/auth/session", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const info: PlatformSessionInfo = {
+    admin: {
+      id: auth.admin.id,
+      email: auth.admin.email,
+      displayName: auth.admin.display_name,
+    },
+    // 期限は cookie 側で管理されているので簡略表示
+    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  };
+  return c.json(ok(info));
+});
+
+// ── 加盟店（テナント）一覧 ──
+app.get("/platform/tenants", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+
+  const rows = await (c.env as Env).SALON_DB.prepare(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id AND u.role = 'owner') AS owner_count,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id) AS staff_count
+       FROM salons s
+       ORDER BY s.created_at DESC`
+  ).all<SalonRow & { owner_count: number; staff_count: number }>();
+
+  const items: TenantSummary[] = (rows.results || []).map((r) => toTenantSummary(r));
+  return c.json(ok({ items }));
+});
+
+// ── 加盟店 詳細 ──
+app.get("/platform/tenants/:id", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const id = Number(c.req.param("id"));
+  const row = await (c.env as Env).SALON_DB.prepare(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id AND u.role = 'owner') AS owner_count,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id) AS staff_count
+       FROM salons s WHERE s.id = ?`
+  )
+    .bind(id)
+    .first<SalonRow & { owner_count: number; staff_count: number }>();
+  if (!row) return c.json(err(ERROR_CODES.NOT_FOUND, "加盟店が見つかりません"), 404);
+  return c.json(ok(toTenantDetail(row)));
+});
+
+// ── 加盟店 新規追加 (+ 初期オーナー) ──
+app.post("/platform/tenants", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+
+  let body: TenantUpsertInput;
+  try {
+    body = (await c.req.json()) as TenantUpsertInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  if (!body.salonName?.trim()) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "店舗名は必須"), 400);
+  if (!body.slug?.trim() || !/^[a-z0-9-]+$/.test(body.slug)) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "slug は半角英数字とハイフンのみ"), 400);
+  }
+  if (!body.larkBitableAppToken?.trim()) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "Bitable App Token は必須"), 400);
+  }
+  if (!body.ownerEmail || !body.ownerName || !body.ownerPassword) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "初期オーナー (email/name/password) は必須"), 400);
+  }
+  if (body.ownerPassword.length < 8) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "オーナーパスワードは8文字以上"), 400);
+  }
+
+  // 重複チェック
+  const existing = await env.SALON_DB.prepare(`SELECT id FROM salons WHERE slug = ?`)
+    .bind(body.slug)
+    .first<{ id: number }>();
+  if (existing) {
+    return c.json(err(ERROR_CODES.CONFLICT, "この slug は既に使用されています", "slug"), 409);
+  }
+
+  // 加盟店追加
+  const subdomain = body.subdomain?.trim() || body.slug;
+  const themeId = body.themeId || "calmer";
+  const result = await env.SALON_DB.prepare(
+    `INSERT INTO salons (
+       salon_name, slug, subdomain, theme_id,
+       lark_app_id, lark_app_secret, lark_bitable_app_token,
+       lark_customer_table_id, lark_karte_table_id,
+       lark_monthly_goal_table_id, lark_yearly_goal_table_id,
+       lark_sales_table_id
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(
+      body.salonName,
+      body.slug,
+      subdomain,
+      themeId,
+      body.larkAppId || null,
+      body.larkAppSecret || null,
+      body.larkBitableAppToken,
+      body.larkCustomerTableId || null,
+      body.larkKarteTableId || null,
+      body.larkMonthlyGoalTableId || null,
+      body.larkYearlyGoalTableId || null,
+      body.larkSalesTableId || null
+    )
+    .run();
+  const salonId = result.meta.last_row_id as number;
+
+  // 初期オーナー作成
+  const hash = await hashPassword(body.ownerPassword);
+  await env.SALON_DB.prepare(
+    `INSERT INTO users (salon_id, email, password_hash, display_name, role)
+     VALUES (?, ?, ?, ?, 'owner')`
+  )
+    .bind(salonId, body.ownerEmail.trim().toLowerCase(), hash, body.ownerName.trim())
+    .run();
+
+  const created = await env.SALON_DB.prepare(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id AND u.role = 'owner') AS owner_count,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id) AS staff_count
+       FROM salons s WHERE s.id = ?`
+  )
+    .bind(salonId)
+    .first<SalonRow & { owner_count: number; staff_count: number }>();
+  return c.json(ok(toTenantDetail(created!)), 201);
+});
+
+// ── 加盟店 編集 (Lark 設定・テーブル ID・テーマ・名前) ──
+app.put("/platform/tenants/:id", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+  const id = Number(c.req.param("id"));
+
+  let body: Partial<TenantUpsertInput>;
+  try {
+    body = (await c.req.json()) as Partial<TenantUpsertInput>;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  if (body.slug && !/^[a-z0-9-]+$/.test(body.slug)) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "slug は半角英数字とハイフンのみ"), 400);
+  }
+
+  // slug 衝突チェック
+  if (body.slug) {
+    const dup = await env.SALON_DB.prepare(`SELECT id FROM salons WHERE slug = ? AND id != ?`)
+      .bind(body.slug, id)
+      .first<{ id: number }>();
+    if (dup) return c.json(err(ERROR_CODES.CONFLICT, "この slug は既に使用されています", "slug"), 409);
+  }
+
+  const fieldMap: Array<[keyof TenantUpsertInput, string]> = [
+    ["salonName", "salon_name"],
+    ["slug", "slug"],
+    ["subdomain", "subdomain"],
+    ["themeId", "theme_id"],
+    ["larkAppId", "lark_app_id"],
+    ["larkBitableAppToken", "lark_bitable_app_token"],
+    ["larkCustomerTableId", "lark_customer_table_id"],
+    ["larkKarteTableId", "lark_karte_table_id"],
+    ["larkMonthlyGoalTableId", "lark_monthly_goal_table_id"],
+    ["larkYearlyGoalTableId", "lark_yearly_goal_table_id"],
+    ["larkSalesTableId", "lark_sales_table_id"],
+  ];
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  for (const [bk, col] of fieldMap) {
+    if (body[bk] !== undefined) {
+      updates.push(`${col} = ?`);
+      values.push((body[bk] as string) || null);
+    }
+  }
+  // App Secret は値が渡された時だけ更新 (空文字は触らない)
+  if (body.larkAppSecret) {
+    updates.push("lark_app_secret = ?");
+    values.push(body.larkAppSecret);
+  }
+  if (updates.length === 0) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "更新するフィールドがありません"), 400);
+  }
+  updates.push("updated_at = datetime('now')");
+  values.push(id);
+
+  await env.SALON_DB.prepare(`UPDATE salons SET ${updates.join(", ")} WHERE id = ?`)
+    .bind(...values)
+    .run();
+
+  const updated = await env.SALON_DB.prepare(
+    `SELECT s.*,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id AND u.role = 'owner') AS owner_count,
+            (SELECT COUNT(*) FROM users u WHERE u.salon_id = s.id) AS staff_count
+       FROM salons s WHERE s.id = ?`
+  )
+    .bind(id)
+    .first<SalonRow & { owner_count: number; staff_count: number }>();
+  if (!updated) return c.json(err(ERROR_CODES.NOT_FOUND, "加盟店が見つかりません"), 404);
+  return c.json(ok(toTenantDetail(updated)));
+});
+
+// ── Lark テーブル自動判定 ──
+//   Bitable App Token を渡すと、その BASE のテーブル一覧を取得して
+//   実 BASE と同じ名前のテーブル ID を「matched」として返す。
+app.get("/platform/lark-tables/inspect", async (c) => {
+  const auth = await requirePlatformAuth(c);
+  if (!auth.ok) return auth.response;
+  const appToken = c.req.query("appToken")?.trim();
+  const appId = c.req.query("appId")?.trim() || (c.env as Env).LARK_APP_ID;
+  const appSecret = c.req.query("appSecret")?.trim() || (c.env as Env).LARK_APP_SECRET;
+  if (!appToken) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "appToken は必須", "appToken"), 400);
+  }
+  if (!appId || !appSecret) {
+    return c.json(
+      err(ERROR_CODES.VALIDATION_ERROR, "Lark App ID / Secret が必要 (URL クエリ or サーバー側設定)"),
+      400
+    );
+  }
+
+  try {
+    const client = new LarkClient(c.env as Env, appId, appSecret, appToken);
+    const tables = await client.listTables();
+    const items = tables.map((t) => ({ tableId: t.table_id, name: t.name }));
+    const findBy = (re: RegExp) => items.find((t) => re.test(t.name))?.tableId ?? null;
+    const matched: BitableTablesInspection["matched"] = {
+      customer: findBy(/新規顧客|顧客データ|顧客台帳/),
+      karte: findBy(/カルテ/),
+      monthlyGoal: findBy(/月間目標/),
+      yearlyGoal: findBy(/年間目標/),
+      sales: findBy(/売上|分析/),
+    };
+    return c.json(ok({ tables: items, matched } satisfies BitableTablesInspection));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ── SalonRow → TenantSummary / TenantDetail ──
+function toTenantSummary(
+  row: SalonRow & { owner_count: number; staff_count: number; created_at?: string; updated_at?: string }
+): TenantSummary {
+  const hasLarkConfig = !!(row.lark_app_id && row.lark_app_secret && row.lark_bitable_app_token);
+  const hasAllTableIds = !!(
+    row.lark_customer_table_id &&
+    row.lark_karte_table_id &&
+    row.lark_monthly_goal_table_id &&
+    row.lark_yearly_goal_table_id &&
+    row.lark_sales_table_id
+  );
+  return {
+    id: row.id,
+    salonName: row.salon_name,
+    slug: row.slug,
+    subdomain: row.subdomain || row.slug,
+    themeId: row.theme_id,
+    logoUrl: row.logo_url,
+    hasLarkConfig,
+    hasAllTableIds,
+    ownerCount: row.owner_count,
+    staffCount: row.staff_count,
+    isActive: !!row.is_active,
+    createdAt: row.created_at || "",
+    updatedAt: row.updated_at || "",
+  };
+}
+
+function toTenantDetail(
+  row: SalonRow & { owner_count: number; staff_count: number; created_at?: string; updated_at?: string }
+): TenantDetail {
+  return {
+    ...toTenantSummary(row),
+    larkAppId: row.lark_app_id || "",
+    larkBitableAppToken: row.lark_bitable_app_token || "",
+    larkCustomerTableId: row.lark_customer_table_id || "",
+    larkKarteTableId: row.lark_karte_table_id || "",
+    larkMonthlyGoalTableId: row.lark_monthly_goal_table_id || "",
+    larkYearlyGoalTableId: row.lark_yearly_goal_table_id || "",
+    larkSalesTableId: row.lark_sales_table_id || "",
+  };
+}
 
 // ============================================================
 // Export for Cloudflare Pages Functions

@@ -238,6 +238,77 @@ export interface SalesAnalytics {
   achievementRate: number | null;     // 達成率 (Formula, 0-1)
 }
 
+// ── Platform Admin (OFFICE PLATA 側) ──
+export interface PlatformAdmin {
+  id: number;
+  email: string;
+  displayName: string;
+}
+
+export interface PlatformSessionInfo {
+  admin: PlatformAdmin;
+  expiresAt: string;
+}
+
+/** 加盟店の一覧/詳細用 (パスワードハッシュ等は含まない) */
+export interface TenantSummary {
+  id: number;
+  salonName: string;
+  slug: string;
+  subdomain: string;
+  themeId: string;
+  logoUrl: string | null;
+  hasLarkConfig: boolean;        // Lark App ID/Secret/Bitable App Token が揃っているか
+  hasAllTableIds: boolean;       // 5 つのテーブル ID が全部揃っているか
+  ownerCount: number;
+  staffCount: number;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TenantDetail extends TenantSummary {
+  larkAppId: string;             // 一部マスクして返す
+  larkBitableAppToken: string;
+  larkCustomerTableId: string;
+  larkKarteTableId: string;
+  larkMonthlyGoalTableId: string;
+  larkYearlyGoalTableId: string;
+  larkSalesTableId: string;
+}
+
+export interface TenantUpsertInput {
+  salonName: string;
+  slug: string;
+  subdomain?: string;
+  themeId?: string;
+  larkAppId?: string;
+  larkAppSecret?: string;        // 渡された時だけ更新 (空の時は触らない)
+  larkBitableAppToken: string;
+  larkCustomerTableId?: string;
+  larkKarteTableId?: string;
+  larkMonthlyGoalTableId?: string;
+  larkYearlyGoalTableId?: string;
+  larkSalesTableId?: string;
+
+  // 新規追加時のみ: 初期オーナー
+  ownerEmail?: string;
+  ownerName?: string;
+  ownerPassword?: string;
+}
+
+/** Lark Bitable の table 一覧と「自動判定」結果 */
+export interface BitableTablesInspection {
+  tables: Array<{ tableId: string; name: string }>;
+  matched: {
+    customer: string | null;
+    karte: string | null;
+    monthlyGoal: string | null;
+    yearlyGoal: string | null;
+    sales: string | null;
+  };
+}
+
 // ── 実 BASE の 5 テーブル ID を持つテーブルマッピング ──
 // 実 BASE 構造:
 //   年間目標シート (tblABnUfoY8XMaD0) → lark_yearly_goal_table_id

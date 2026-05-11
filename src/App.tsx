@@ -11,7 +11,11 @@ import KarteDetail from "./pages/KarteDetail";
 import Goals from "./pages/Goals";
 import GoalsYearlyPage from "./pages/GoalsYearly";
 import GoalsMonthlyPage from "./pages/GoalsMonthly";
+import PlatformLogin from "./pages/PlatformLogin";
+import PlatformTenants from "./pages/PlatformTenants";
+import PlatformTenantDetail from "./pages/PlatformTenantDetail";
 import { AuthGuard } from "./lib/auth-context";
+import { PlatformAuthGuard } from "./lib/platform-auth-context";
 
 function App() {
   return (
@@ -60,6 +64,17 @@ function App() {
           <AuthGuard>
             <GoalsMonthlyPage />
           </AuthGuard>
+        </Route>
+        <Route path="/platform/login" component={PlatformLogin} />
+        <Route path="/platform/tenants">
+          <PlatformAuthGuard>
+            <PlatformTenants />
+          </PlatformAuthGuard>
+        </Route>
+        <Route path="/platform/tenants/:id">
+          <PlatformAuthGuard>
+            <PlatformTenantDetail />
+          </PlatformAuthGuard>
         </Route>
         <Route>
           <div className="min-h-screen flex items-center justify-center bg-background">

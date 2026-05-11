@@ -4,6 +4,7 @@
  */
 import type {
   ApiResponse,
+  BitableTablesInspection,
   Customer,
   CustomerInput,
   CustomerListQuery,
@@ -14,9 +15,13 @@ import type {
   KarteListResult,
   MonthlyGoal,
   MonthlyGoalInput,
+  PlatformSessionInfo,
   SalesAnalytics,
   SessionInfo,
+  TenantDetail,
   TenantInfo,
+  TenantSummary,
+  TenantUpsertInput,
   YearlyGoal,
   YearlyGoalInput,
 } from "../../shared/types";
@@ -313,6 +318,64 @@ export const api = {
   analytics: {
     list: () =>
       unwrap(requestWithEnvelope<{ items: SalesAnalytics[] }>("/analytics")),
+  },
+
+  // ── Phase B-1: Platform Admin (OFFICE PLATA 側) ──
+  platform: {
+    login: (email: string, password: string) =>
+      unwrap(
+        requestWithEnvelope<PlatformSessionInfo>("/platform/auth/login", {
+          method: "POST",
+          body: JSON.stringify({ email, password }),
+        })
+      ),
+
+    logout: () =>
+      unwrap(requestWithEnvelope<{ loggedOut: boolean }>("/platform/auth/logout", { method: "POST" })),
+
+    session: () =>
+      unwrap(requestWithEnvelope<PlatformSessionInfo>("/platform/auth/session")),
+
+    tenants: {
+      list: () =>
+        unwrap(requestWithEnvelope<{ items: TenantSummary[] }>("/platform/tenants")),
+
+      get: (id: number) =>
+        unwrap(requestWithEnvelope<TenantDetail>(`/platform/tenants/${id}`)),
+
+      create: (input: TenantUpsertInput) =>
+        unwrap(
+          requestWithEnvelope<TenantDetail>("/platform/tenants", {
+            method: "POST",
+            body: JSON.stringify(input),
+          })
+        ),
+
+      update: (id: number, input: Partial<TenantUpsertInput>) =>
+        unwrap(
+          requestWithEnvelope<TenantDetail>(`/platform/tenants/${id}`, {
+            method: "PUT",
+            body: JSON.stringify(input),
+          })
+        ),
+    },
+
+    /** Bitable App Token から 5 テーブル ID を自動判定する */
+    inspectLarkTables: (params: {
+      appToken: string;
+      appId?: string;
+      appSecret?: string;
+    }) => {
+      const qs = new URLSearchParams();
+      qs.set("appToken", params.appToken);
+      if (params.appId) qs.set("appId", params.appId);
+      if (params.appSecret) qs.set("appSecret", params.appSecret);
+      return unwrap(
+        requestWithEnvelope<BitableTablesInspection>(
+          `/platform/lark-tables/inspect?${qs.toString()}`
+        )
+      );
+    },
   },
 
   // ── Phase 0-1: 認証・テナント ──
