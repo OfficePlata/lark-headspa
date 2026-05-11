@@ -78,6 +78,9 @@ import type {
   TenantDetail,
   TenantUpsertInput,
   BitableTablesInspection,
+  StaffUser,
+  StaffCreateInput,
+  StaffUpdateInput,
 } from "../../shared/types";
 
 // ============================================================
@@ -2033,6 +2036,245 @@ function toTenantDetail(
     larkSalesTableId: row.lark_sales_table_id || "",
   };
 }
+
+// ============================================================
+// スタッフ管理 API (Phase B-2)
+//   加盟店オーナー (role=owner) が自店舗のスタッフを管理する
+// ============================================================
+
+// ── スタッフ管理用ガード: 認証済み + 自サロンの owner のみ ──
+async function requireOwner(
+  c: any
+): Promise<
+  | { ok: true; me: UserRow; salonId: number }
+  | { ok: false; response: Response }
+> {
+  const env = c.env as Env;
+  const token = readSessionTokenFromCookie(c.req.header("Cookie") || null);
+  if (!token) {
+    return { ok: false, response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "未認証"), 401) };
+  }
+  const session = await getSession(env, token);
+  if (!session) {
+    return { ok: false, response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "セッション無効"), 401) };
+  }
+  const me = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE id = ? AND is_active = 1 LIMIT 1`
+  )
+    .bind(session.user_id)
+    .first<UserRow>();
+  if (!me) {
+    return { ok: false, response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "ユーザー無効"), 401) };
+  }
+  if (me.role !== "owner") {
+    return {
+      ok: false,
+      response: c.json(err(ERROR_CODES.AUTH_UNAUTHENTICATED, "スタッフ管理はオーナーのみ操作できます"), 403),
+    };
+  }
+  return { ok: true, me, salonId: session.salon_id };
+}
+
+function toStaffUser(row: UserRow, selfId: number): StaffUser {
+  return {
+    id: row.id,
+    salonId: row.salon_id,
+    email: row.email,
+    displayName: row.display_name,
+    role: row.role,
+    isActive: !!row.is_active,
+    lastLoginAt: row.last_login_at,
+    createdAt: row.created_at,
+    isSelf: row.id === selfId,
+  };
+}
+
+/** 自分の salon の「有効な owner」の数を返す */
+async function countActiveOwners(env: Env, salonId: number): Promise<number> {
+  const row = await env.SALON_DB.prepare(
+    `SELECT COUNT(*) AS n FROM users
+       WHERE salon_id = ? AND role = 'owner' AND is_active = 1`
+  )
+    .bind(salonId)
+    .first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+// ── スタッフ一覧 ──
+app.get("/staff", async (c) => {
+  const auth = await requireOwner(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+
+  const rows = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE salon_id = ? ORDER BY is_active DESC, role DESC, created_at ASC`
+  )
+    .bind(auth.salonId)
+    .all<UserRow>();
+  const items: StaffUser[] = (rows.results || []).map((r) => toStaffUser(r, auth.me.id));
+  return c.json(ok({ items }));
+});
+
+// ── スタッフ新規追加 ──
+app.post("/staff", async (c) => {
+  const auth = await requireOwner(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+
+  let body: StaffCreateInput;
+  try {
+    body = (await c.req.json()) as StaffCreateInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  const email = (body.email || "").trim().toLowerCase();
+  if (!email) return c.json(err(ERROR_CODES.VALIDATION_ERROR, "メールは必須", "email"), 400);
+  if (!body.displayName?.trim()) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "表示名は必須", "displayName"), 400);
+  }
+  if (!body.password || body.password.length < 8) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "パスワードは8文字以上", "password"), 400);
+  }
+  const role = body.role === "owner" ? "owner" : "staff";
+
+  // 同 salon・同 email チェック
+  const dup = await env.SALON_DB.prepare(
+    `SELECT id FROM users WHERE salon_id = ? AND email = ?`
+  )
+    .bind(auth.salonId, email)
+    .first<{ id: number }>();
+  if (dup) {
+    return c.json(err(ERROR_CODES.CONFLICT, "このメールは既に登録されています", "email"), 409);
+  }
+
+  const hash = await hashPassword(body.password);
+  const result = await env.SALON_DB.prepare(
+    `INSERT INTO users (salon_id, email, password_hash, display_name, role)
+     VALUES (?, ?, ?, ?, ?)`
+  )
+    .bind(auth.salonId, email, hash, body.displayName.trim(), role)
+    .run();
+  const newId = result.meta.last_row_id as number;
+
+  const created = await env.SALON_DB.prepare(`SELECT * FROM users WHERE id = ?`)
+    .bind(newId)
+    .first<UserRow>();
+  return c.json(ok(toStaffUser(created!, auth.me.id)), 201);
+});
+
+// ── スタッフ編集 (表示名 / ロール / 有効化フラグ) ──
+app.put("/staff/:id", async (c) => {
+  const auth = await requireOwner(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+  const targetId = Number(c.req.param("id"));
+
+  let body: StaffUpdateInput;
+  try {
+    body = (await c.req.json()) as StaffUpdateInput;
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+
+  // 対象を取得
+  const target = await env.SALON_DB.prepare(
+    `SELECT * FROM users WHERE id = ? AND salon_id = ?`
+  )
+    .bind(targetId, auth.salonId)
+    .first<UserRow>();
+  if (!target) return c.json(err(ERROR_CODES.NOT_FOUND, "スタッフが見つかりません"), 404);
+
+  // セーフガード:
+  // - 自分自身を無効化はできない
+  // - 自分自身の role を staff に下げるのは、他に owner がいる場合のみ
+  // - 最後の有効な owner を無効化 / staff 降格はできない
+  if (target.id === auth.me.id && body.isActive === false) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "自分自身を無効化することはできません"), 400);
+  }
+  const wantsDowngrade = body.role === "staff" && target.role === "owner";
+  const wantsDisable = body.isActive === false && target.is_active === 1;
+  if ((wantsDowngrade || wantsDisable) && target.role === "owner" && target.is_active === 1) {
+    const owners = await countActiveOwners(env, auth.salonId);
+    if (owners <= 1) {
+      return c.json(
+        err(ERROR_CODES.VALIDATION_ERROR, "最後の有効なオーナーは降格/無効化できません"),
+        400
+      );
+    }
+  }
+
+  const updates: string[] = [];
+  const values: unknown[] = [];
+  if (body.displayName !== undefined) {
+    if (!body.displayName.trim())
+      return c.json(err(ERROR_CODES.VALIDATION_ERROR, "表示名は空にできません", "displayName"), 400);
+    updates.push("display_name = ?");
+    values.push(body.displayName.trim());
+  }
+  if (body.role !== undefined) {
+    if (body.role !== "owner" && body.role !== "staff") {
+      return c.json(err(ERROR_CODES.VALIDATION_ERROR, "role は owner または staff", "role"), 400);
+    }
+    updates.push("role = ?");
+    values.push(body.role);
+  }
+  if (body.isActive !== undefined) {
+    updates.push("is_active = ?");
+    values.push(body.isActive ? 1 : 0);
+  }
+  if (updates.length === 0) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "更新するフィールドがありません"), 400);
+  }
+  updates.push("updated_at = datetime('now')");
+  values.push(targetId);
+
+  await env.SALON_DB.prepare(`UPDATE users SET ${updates.join(", ")} WHERE id = ?`)
+    .bind(...values)
+    .run();
+
+  const updated = await env.SALON_DB.prepare(`SELECT * FROM users WHERE id = ?`)
+    .bind(targetId)
+    .first<UserRow>();
+  return c.json(ok(toStaffUser(updated!, auth.me.id)));
+});
+
+// ── スタッフのパスワードリセット ──
+app.post("/staff/:id/reset-password", async (c) => {
+  const auth = await requireOwner(c);
+  if (!auth.ok) return auth.response;
+  const env = c.env as Env;
+  const targetId = Number(c.req.param("id"));
+
+  let body: { password?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "不正なリクエスト形式"), 400);
+  }
+  if (!body.password || body.password.length < 8) {
+    return c.json(err(ERROR_CODES.VALIDATION_ERROR, "パスワードは8文字以上", "password"), 400);
+  }
+
+  const target = await env.SALON_DB.prepare(
+    `SELECT id FROM users WHERE id = ? AND salon_id = ?`
+  )
+    .bind(targetId, auth.salonId)
+    .first<{ id: number }>();
+  if (!target) return c.json(err(ERROR_CODES.NOT_FOUND, "スタッフが見つかりません"), 404);
+
+  const hash = await hashPassword(body.password);
+  await env.SALON_DB.prepare(
+    `UPDATE users SET password_hash = ?, updated_at = datetime('now') WHERE id = ?`
+  )
+    .bind(hash, targetId)
+    .run();
+
+  // 該当ユーザーの既存セッションをすべて無効化 (パスワード変更後は再ログインを強制)
+  await env.SALON_DB.prepare(`DELETE FROM sessions WHERE user_id = ?`).bind(targetId).run();
+  // KV キャッシュは TTL でいずれ消えるので明示削除なし
+
+  return c.json(ok({ resetAt: new Date().toISOString() }));
+});
 
 // ============================================================
 // Export for Cloudflare Pages Functions

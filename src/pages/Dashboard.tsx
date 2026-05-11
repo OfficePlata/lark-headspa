@@ -92,6 +92,15 @@ export default function Dashboard() {
               <Target className="w-4 h-4" />
               目標
             </Link>
+            {session.user.role === "owner" && (
+              <Link
+                href="/staff"
+                className="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium text-slate-700 hover:bg-slate-100 transition"
+              >
+                <Users className="w-4 h-4" />
+                スタッフ
+              </Link>
+            )}
             <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-50 border border-slate-200">
               <div className="w-6 h-6 rounded-full bg-slate-300 text-white text-xs font-semibold flex items-center justify-center">
                 {session.user.displayName.slice(0, 1)}

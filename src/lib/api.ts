@@ -18,6 +18,9 @@ import type {
   PlatformSessionInfo,
   SalesAnalytics,
   SessionInfo,
+  StaffCreateInput,
+  StaffUpdateInput,
+  StaffUser,
   TenantDetail,
   TenantInfo,
   TenantSummary,
@@ -318,6 +321,35 @@ export const api = {
   analytics: {
     list: () =>
       unwrap(requestWithEnvelope<{ items: SalesAnalytics[] }>("/analytics")),
+  },
+
+  // ── Phase B-2: スタッフ管理 (加盟店オーナーが自店舗のスタッフをCRUD) ──
+  staff: {
+    list: () => unwrap(requestWithEnvelope<{ items: StaffUser[] }>("/staff")),
+
+    create: (input: StaffCreateInput) =>
+      unwrap(
+        requestWithEnvelope<StaffUser>("/staff", {
+          method: "POST",
+          body: JSON.stringify(input),
+        })
+      ),
+
+    update: (id: number, input: StaffUpdateInput) =>
+      unwrap(
+        requestWithEnvelope<StaffUser>(`/staff/${id}`, {
+          method: "PUT",
+          body: JSON.stringify(input),
+        })
+      ),
+
+    resetPassword: (id: number, password: string) =>
+      unwrap(
+        requestWithEnvelope<{ resetAt: string }>(`/staff/${id}/reset-password`, {
+          method: "POST",
+          body: JSON.stringify({ password }),
+        })
+      ),
   },
 
   // ── Phase B-1: Platform Admin (OFFICE PLATA 側) ──

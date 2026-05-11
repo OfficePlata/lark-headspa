@@ -238,6 +238,32 @@ export interface SalesAnalytics {
   achievementRate: number | null;     // 達成率 (Formula, 0-1)
 }
 
+// ── スタッフ管理 (Phase B-2: 加盟店オーナー側) ──
+export interface StaffUser {
+  id: number;
+  salonId: number;
+  email: string;
+  displayName: string;
+  role: "owner" | "staff";
+  isActive: boolean;
+  lastLoginAt: string | null;
+  createdAt: string;
+  isSelf: boolean;          // 現在ログイン中の自分かどうか
+}
+
+export interface StaffCreateInput {
+  email: string;
+  displayName: string;
+  password: string;
+  role?: "owner" | "staff";
+}
+
+export interface StaffUpdateInput {
+  displayName?: string;
+  role?: "owner" | "staff";
+  isActive?: boolean;
+}
+
 // ── Platform Admin (OFFICE PLATA 側) ──
 export interface PlatformAdmin {
   id: number;

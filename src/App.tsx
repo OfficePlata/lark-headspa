@@ -14,6 +14,7 @@ import GoalsMonthlyPage from "./pages/GoalsMonthly";
 import PlatformLogin from "./pages/PlatformLogin";
 import PlatformTenants from "./pages/PlatformTenants";
 import PlatformTenantDetail from "./pages/PlatformTenantDetail";
+import StaffPage from "./pages/Staff";
 import { AuthGuard } from "./lib/auth-context";
 import { PlatformAuthGuard } from "./lib/platform-auth-context";
 
@@ -63,6 +64,11 @@ function App() {
         <Route path="/goals/monthly">
           <AuthGuard>
             <GoalsMonthlyPage />
+          </AuthGuard>
+        </Route>
+        <Route path="/staff">
+          <AuthGuard>
+            <StaffPage />
           </AuthGuard>
         </Route>
         <Route path="/platform/login" component={PlatformLogin} />
