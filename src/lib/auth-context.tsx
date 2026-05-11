@@ -34,6 +34,12 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // React Hooks Rules: hook は早期 return の前にすべて呼ぶ
+  const theme = useMemo(
+    () => getTheme(session?.tenant.themeId ?? "calmer"),
+    [session?.tenant.themeId]
+  );
+
   useEffect(() => {
     let mounted = true;
     api.auth
@@ -75,7 +81,6 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     // すでに /login へリダイレクト中
     return null;
   }
-  const theme = useMemo(() => getTheme(session.tenant.themeId), [session.tenant.themeId]);
 
   return (
     <AuthContext.Provider value={{ session, theme, logout }}>
