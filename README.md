@@ -103,6 +103,47 @@ pnpm test
 
 ---
 
+## 加盟店（テナント）を追加する
+
+新規加盟店を 1 コマンドで追加できます。Lark BASE は加盟店ごとに別の BASE を作っておく前提です（テーブル ID は実 BASE の URL から取得）。
+
+```bash
+SLUG=calmer-shimotsuke \
+SALON_NAME="Calmer 下野店" \
+OWNER_EMAIL="owner@calmer-shimotsuke.localhost" \
+OWNER_NAME="下野オーナー" \
+OWNER_PASSWORD="changeme" \
+BITABLE_APP_TOKEN="TC4QbGyrLarVFcsqmNIjrzmLp4f" \
+CUSTOMER_TABLE_ID="tblaxZtrnk0jwBjB" \
+KARTE_TABLE_ID="tbl4Crds3zemyxUp" \
+MONTHLY_GOAL_TABLE_ID="tblhOI7T3lu5T7xM" \
+YEARLY_GOAL_TABLE_ID="tblABnUfoY8XMaD0" \
+SALES_TABLE_ID="tbl2ZzvKO8q5NEh7" \
+pnpm tenant:add:remote
+```
+
+オプション環境変数：
+
+| 変数 | 説明 | デフォルト |
+|------|------|----------|
+| `THEME_ID` | テーマ ID | `calmer` |
+| `LARK_APP_ID` | 加盟店固有 Lark App ID | 空（全社共通の運用想定） |
+| `LARK_APP_SECRET` | 同上 | 空 |
+| `OWNER_ROLE` | `owner` か `staff` | `owner` |
+| `SUBDOMAIN` | サブドメイン | SLUG と同じ |
+
+ローカル D1 に試したい場合は `pnpm tenant:add:local`、SQL だけ生成して確認したい場合は `pnpm tenant:add:gen`（`/tmp/add-tenant.sql` に出力）。
+
+実行後、加盟店オーナーは以下でログインできます：
+
+```
+https://lark-headspa.pages.dev/login?tenant=<SLUG>
+```
+
+`?tenant=...` クエリは初回アクセス時に `localStorage` に保存されるので、ブックマークすればそれ以降は単に `https://lark-headspa.pages.dev/login` でも OK。別の加盟店に切り替える場合は再度 `?tenant=別の slug` を付けてアクセス。
+
+---
+
 ## 認証・テナント API（Phase 0-1）
 
 | メソッド | パス | 説明 |

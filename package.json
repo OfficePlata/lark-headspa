@@ -14,6 +14,9 @@
     "seed:gen": "node scripts/seed.mjs > /tmp/seed.sql",
     "seed:local": "node scripts/seed.mjs > /tmp/seed.sql && wrangler d1 execute SALON_DB --local --file=/tmp/seed.sql",
     "seed:remote": "node scripts/seed.mjs > /tmp/seed.sql && wrangler d1 execute SALON_DB --remote --file=/tmp/seed.sql",
+    "tenant:add:gen": "node scripts/add-tenant.mjs > /tmp/add-tenant.sql",
+    "tenant:add:local": "node scripts/add-tenant.mjs > /tmp/add-tenant.sql && wrangler d1 execute SALON_DB --local --file=/tmp/add-tenant.sql",
+    "tenant:add:remote": "node scripts/add-tenant.mjs > /tmp/add-tenant.sql && wrangler d1 execute SALON_DB --remote --file=/tmp/add-tenant.sql",
     "test": "vitest run",
     "check": "tsc --noEmit"
   },
