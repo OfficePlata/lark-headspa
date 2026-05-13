@@ -45,17 +45,21 @@ export default function Goals() {
   // 表示する年度の手動選択 (null なら自動)
   const [selectedFiscalYear, setSelectedFiscalYear] = useState<string | null>(null);
 
+  // 年度文字列から数字4桁を抽出 ("2026年" / "2026年度" / "2026" すべて → "2026")
+  const extractYear = (s: string): string => {
+    const m = s.match(/(\d{4})/);
+    return m ? m[1] : s;
+  };
+
   // 現年度がデータにあればそれを優先、なければ最新 (sort desc 済) の先頭
   const autoFiscalYear = useMemo(() => {
-    const exact =
-      yearly.find((y) => y.fiscalYear === currentYear) ||
-      yearly.find((y) => y.fiscalYear.startsWith(currentYear));
+    const exact = yearly.find((y) => extractYear(y.fiscalYear) === currentYear);
     if (exact) return exact.fiscalYear;
     return yearly[0]?.fiscalYear ?? null;
   }, [yearly, currentYear]);
 
   const effectiveFiscalYear = selectedFiscalYear ?? autoFiscalYear;
-  const hasCurrentYearData = !!yearly.find((y) => y.fiscalYear === currentYear);
+  const hasCurrentYearData = !!yearly.find((y) => extractYear(y.fiscalYear) === currentYear);
 
   const currentYearly = useMemo(
     () => yearly.find((y) => y.fiscalYear === effectiveFiscalYear) ?? null,
