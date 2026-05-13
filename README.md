@@ -160,19 +160,90 @@ https://lark-headspa.pages.dev/login?tenant=<SLUG>
 ## ディレクトリ構成（追加分）
 
 ```
-├─ functions/api/[[route]].ts   ← 認証エンドポイントを追加済
+├─ functions/api/[[route]].ts   ← 認証 / 顧客 / カルテ / 目標 / Platform Admin / スタッフ管理 API
 ├─ src/
 │   ├─ lib/
-│   │   ├─ lark-client.ts       ← Bitable CRUD ラッパー（KVキャッシュ・リトライ付き）
+│   │   ├─ lark-client.ts       ← Bitable CRUD + Dashboard 一覧ラッパー
 │   │   ├─ auth.ts              ← bcrypt + セッション + Cookie + 失敗カウント
 │   │   ├─ tenant.ts            ← Host → サロン解決
-│   │   └─ auth-context.tsx     ← React 認証ガード
-│   └─ pages/Login.tsx          ← ログイン画面
-├─ shared/types.ts              ← API 形式・テナント / セッション型
-├─ drizzle/migrations/0002_auth.sql  ← users / sessions / platform_admins
-├─ scripts/seed.mjs             ← 初期データ投入用 SQL ジェネレータ
+│   │   ├─ auth-context.tsx     ← React 認証ガード + useTheme フック
+│   │   ├─ platform-auth.ts     ← Platform Admin 用セッション管理
+│   │   ├─ platform-auth-context.tsx ← Platform Admin AuthGuard
+│   │   ├─ customer-mapper.ts   ← 顧客テーブル Lark フィールド変換
+│   │   ├─ karte-mapper.ts      ← カルテテーブル Lark フィールド変換
+│   │   └─ goals-mapper.ts      ← 年間/月間目標・売上分析 Lark フィールド変換
+│   ├─ components/AppShell.tsx  ← 共通ヘッダー (テーマカラー反映 + ユーザーメニュー)
+│   └─ pages/
+│       ├─ Login.tsx / Dashboard.tsx
+│       ├─ Customers.tsx / CustomerDetail.tsx
+│       ├─ Karte.tsx / KarteDetail.tsx
+│       ├─ Goals.tsx / GoalsYearly.tsx / GoalsMonthly.tsx
+│       ├─ Staff.tsx
+│       ├─ PlatformLogin.tsx / PlatformTenants.tsx / PlatformTenantDetail.tsx
+│       └─ PublicForm.tsx (旧フォームシステム)
+├─ shared/
+│   ├─ types.ts                 ← API 形式・各種型定義
+│   └─ themes.ts                ← テーマ定義 (calmer/natural/elegant/fresh/sakura)
+├─ drizzle/migrations/
+│   ├─ 0001_init.sql            ← salons / submissions (旧フォームシステム)
+│   ├─ 0002_auth.sql            ← users / sessions / platform_admins / login_failures
+│   └─ 0003_platform.sql        ← platform_sessions
+├─ scripts/
+│   ├─ seed.mjs                 ← 初期データ投入
+│   └─ add-tenant.mjs           ← 加盟店追加用 SQL ジェネレータ
 └─ tests/                       ← Vitest
 ```
+
+---
+
+## Phase B 以降の機能（GUI 管理画面）
+
+### Platform Admin（OFFICE PLATA 用）
+
+OFFICE PLATA 側で加盟店を GUI 管理する画面：
+
+- **`/platform/login`** — Platform Admin 専用ログイン（ネイビー基調）
+- **`/platform/tenants`** — 加盟店一覧（Lark 設定状態のバッジ付き）
+- **`/platform/tenants/:id`** — 加盟店詳細・編集
+  - Bitable App Token を入れて「**5テーブル自動判定**」ボタンで Lark API からテーブル一覧を取得→`新規顧客データ` / `カルテデータ` / `月間目標シート` / `年間目標シート` / `売上・分析` に名前マッチで自動入力
+  - 新規追加時は **初期オーナー**（メール / 表示名 / パスワード / ロール）も同時登録
+  - 編集モードでは **「スタッフ一覧」セクション**から既存加盟店に追加スタッフを登録可能
+  - **App Secret は空欄なら既存値維持**
+
+### 加盟店オーナー / スタッフ用
+
+- **`/login?tenant=<slug>`** — 加盟店ログイン（クエリは初回アクセス時に `localStorage` に保存→以降は `/login` だけで OK）
+- **`/dashboard`** — 加盟店スタッフ向けホーム（5 カード型ナビ）
+  - 顧客台帳 / カルテ / 目標 / スタッフ管理（オーナーのみ）
+  - **Lark BASE ダッシュボード**カード — BASE 内に作成したダッシュボード（グラフ集計ビュー）を直接開く。複数件あればプルダウンで選択
+- **`/customers` / `/customers/:id`** — 顧客台帳（一覧/検索/新規/編集）
+- **`/karte` / `/karte/:id`** — カルテ（来店履歴+施術コメント+写真）
+- **`/goals` / `/goals/yearly` / `/goals/monthly`** — 目標ダッシュボード（達成率・新規率の可視化）
+- **`/staff`** — スタッフ管理（オーナーのみ）
+  - 新規追加 / ロール変更 / 有効化トグル / パスワードリセット
+  - セーフガード: 自分自身を無効化不可・最後の有効オーナーを降格/無効化不可
+
+### 加盟店ごとのテーマ反映
+
+Platform Admin の編集画面で **テーマ ID**（`calmer` / `natural` / `elegant` / `fresh` / `sakura`）を選択すると、その加盟店のスタッフがログインした時の管理画面のヘッダー色・ボタン色・フォント・角 R が切り替わります。
+
+### 自分のパスワード変更
+
+各画面の右上アバター → 「パスワード変更」
+- 現在のパスワード検証 → 新パスワード設定
+- 変更後、**他端末のセッションは無効化**（本人の現セッションは維持）
+
+---
+
+## 認証・テナント解決のポイント
+
+API リクエストには **`X-Tenant-Slug` ヘッダー**が自動付与されます。仕組み：
+
+- 初回 `https://lark-headspa.pages.dev/login?tenant=<slug>` でアクセス → `localStorage` に保存
+- 以降は `localStorage` 値を全 API リクエストにヘッダーで転送
+- 別の加盟店に切り替える時は再度 `?tenant=別の slug` でアクセス（上書き）
+
+これにより、Cloudflare Pages のような **単一ドメイン運用**でも複数加盟店を扱えます。将来独自ドメインを取得すれば、サブドメイン (`<slug>.crm.example.com`) ベースの解決にも自動で対応します。
 
 ---
 
