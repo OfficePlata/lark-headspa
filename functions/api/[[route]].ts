@@ -2384,9 +2384,9 @@ app.get("/lark/dashboards", async (c) => {
   try {
     const items = await client.listDashboards();
     const result = items.map((d) => ({
-      dashboardId: d.dashboard_id,
+      dashboardId: d.block_id,
       name: d.name,
-      url: client.buildDashboardUrl(d.dashboard_id),
+      url: client.buildDashboardUrl(d.block_id),
     }));
     return c.json(ok({ items: result }));
   } catch (e: any) {

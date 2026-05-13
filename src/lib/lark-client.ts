@@ -220,19 +220,20 @@ export class LarkClient {
 
   // ── ダッシュボード一覧 ──
   //   GET /open-apis/bitable/v1/apps/{app_token}/dashboards
-  async listDashboards(): Promise<Array<{ dashboard_id: string; name: string }>> {
-    const all: Array<{ dashboard_id: string; name: string }> = [];
+  //   レスポンス: { dashboards: [{ block_id, name, share_config }], has_more, page_token }
+  async listDashboards(): Promise<Array<{ block_id: string; name: string }>> {
+    const all: Array<{ block_id: string; name: string }> = [];
     let pageToken: string | undefined;
     let safety = 20;
     do {
       const params = new URLSearchParams({ page_size: "100" });
       if (pageToken) params.set("page_token", pageToken);
       const data = await this.request<{
-        items?: Array<{ dashboard_id: string; name: string }>;
+        dashboards?: Array<{ block_id: string; name: string }>;
         has_more?: boolean;
         page_token?: string;
       }>("GET", `/bitable/v1/apps/${this.appToken}/dashboards?${params}`);
-      all.push(...(data.items || []));
+      all.push(...(data.dashboards || []));
       pageToken = data.has_more ? data.page_token : undefined;
       safety--;
     } while (pageToken && safety > 0);
@@ -240,9 +241,9 @@ export class LarkClient {
   }
 
   /** Bitable dashboard URL を組み立てる (Lark Web で開ける) */
-  buildDashboardUrl(dashboardId: string): string {
+  buildDashboardUrl(blockId: string): string {
     // Lark の dashboard は from=dashboard クエリで該当ダッシュボードを開く挙動
-    return `https://${this.domain.replace(/^open\./, "www.")}/base/${this.appToken}?from=dashboard&dashboard_id=${encodeURIComponent(dashboardId)}`;
+    return `https://${this.domain.replace(/^open\./, "www.")}/base/${this.appToken}?from=dashboard&dashboard_id=${encodeURIComponent(blockId)}`;
   }
 
   // ── テーブル一覧 ──
