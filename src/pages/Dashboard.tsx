@@ -4,19 +4,55 @@
  * ログイン直後に表示する。テーマカラーで彩られたカード型のリンクで
  * 主要機能 (顧客台帳 / カルテ / 目標 / スタッフ) への導線をシンプルに提供する。
  */
+import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import {
   ArrowUpRight,
+  BarChart3,
   ClipboardList,
+  ExternalLink,
   Target,
   Users,
 } from "lucide-react";
+import { api } from "@/lib/api";
 import { useAuthSession } from "@/lib/auth-context";
 import AppShell from "@/components/AppShell";
+
+interface LarkDashboard {
+  dashboardId: string;
+  name: string;
+  url: string;
+}
 
 export default function Dashboard() {
   const { session, theme } = useAuthSession();
   const isOwner = session.user.role === "owner";
+
+  // Lark BASE のダッシュボード一覧
+  const [larkDashboards, setLarkDashboards] = useState<LarkDashboard[]>([]);
+  const [dashLoading, setDashLoading] = useState(true);
+  const [dashError, setDashError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    api.larkDashboards
+      .list()
+      .then((res) => {
+        if (mounted) {
+          setLarkDashboards(res.items);
+          setDashError(null);
+        }
+      })
+      .catch((e) => {
+        if (mounted) setDashError(e instanceof Error ? e.message : "取得失敗");
+      })
+      .finally(() => {
+        if (mounted) setDashLoading(false);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const tiles: Array<{
     href: string;
@@ -75,9 +111,168 @@ export default function Dashboard() {
                 <Tile theme={theme} icon={t.icon} label={t.label} description={t.description} />
               </Link>
             ))}
+          <LarkDashboardTile
+            theme={theme}
+            items={larkDashboards}
+            loading={dashLoading}
+            error={dashError}
+          />
         </div>
       </div>
     </AppShell>
+  );
+}
+
+// ── Lark BASE 内のダッシュボードへの導線 ──
+function LarkDashboardTile({
+  theme,
+  items,
+  loading,
+  error,
+}: {
+  theme: ReturnType<typeof useAuthSession>["theme"];
+  items: LarkDashboard[];
+  loading: boolean;
+  error: string | null;
+}) {
+  const [selectedId, setSelectedId] = useState<string>("");
+
+  // items が変わったら最初の1件を初期選択
+  useEffect(() => {
+    if (items.length > 0 && !selectedId) {
+      setSelectedId(items[0].dashboardId);
+    }
+  }, [items, selectedId]);
+
+  const selected = items.find((d) => d.dashboardId === selectedId) ?? items[0];
+
+  const cardStyle = {
+    borderRadius: theme.borderRadius,
+    border: `1px solid ${theme.colors.border}`,
+  };
+  const iconBox = (
+    <div
+      className="w-11 h-11 rounded-xl flex items-center justify-center text-white shrink-0"
+      style={{ background: theme.colors.primary }}
+    >
+      <BarChart3 className="w-6 h-6" />
+    </div>
+  );
+
+  // ロード中
+  if (loading) {
+    return (
+      <div className="block bg-white p-5" style={cardStyle}>
+        <div className="flex items-start gap-3">
+          {iconBox}
+          <div className="flex-1 min-w-0">
+            <h3 className="text-base font-bold" style={{ color: theme.colors.text }}>
+              Lark ダッシュボード
+            </h3>
+            <p className="text-xs mt-1" style={{ color: theme.colors.textMuted }}>
+              読み込み中…
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // エラー or 0件
+  if (error || items.length === 0) {
+    return (
+      <div className="block bg-white p-5" style={cardStyle}>
+        <div className="flex items-start gap-3">
+          {iconBox}
+          <div className="flex-1 min-w-0">
+            <h3 className="text-base font-bold" style={{ color: theme.colors.text }}>
+              Lark ダッシュボード
+            </h3>
+            <p className="text-xs mt-1" style={{ color: theme.colors.textMuted }}>
+              {error
+                ? "取得に失敗しました"
+                : "BASE にダッシュボードがまだありません"}
+            </p>
+            {error && (
+              <p className="text-xs mt-0.5 text-red-600 line-clamp-2">{error}</p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 1件のみ: 直接「開く」
+  if (items.length === 1) {
+    return (
+      <a
+        href={items[0].url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="block bg-white p-5 hover:shadow-md transition cursor-pointer group"
+        style={cardStyle}
+      >
+        <div className="flex items-start gap-3">
+          {iconBox}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1">
+              <h3 className="text-base font-bold" style={{ color: theme.colors.text }}>
+                Lark ダッシュボード
+              </h3>
+              <ExternalLink
+                className="w-4 h-4 opacity-0 group-hover:opacity-100 transition"
+                style={{ color: theme.colors.primary }}
+              />
+            </div>
+            <p
+              className="text-xs mt-1 leading-relaxed truncate"
+              style={{ color: theme.colors.textMuted }}
+            >
+              {items[0].name}
+            </p>
+          </div>
+        </div>
+      </a>
+    );
+  }
+
+  // 複数: プルダウン + 「開く」ボタン
+  return (
+    <div className="block bg-white p-5" style={cardStyle}>
+      <div className="flex items-start gap-3 mb-3">
+        {iconBox}
+        <div className="flex-1 min-w-0">
+          <h3 className="text-base font-bold" style={{ color: theme.colors.text }}>
+            Lark ダッシュボード
+          </h3>
+          <p className="text-xs mt-1" style={{ color: theme.colors.textMuted }}>
+            {items.length} 件のダッシュボードがあります
+          </p>
+        </div>
+      </div>
+      <select
+        value={selectedId}
+        onChange={(e) => setSelectedId(e.target.value)}
+        className="w-full px-3 py-2 rounded-lg border text-sm bg-white mb-2"
+        style={{ borderColor: theme.colors.border }}
+      >
+        {items.map((d) => (
+          <option key={d.dashboardId} value={d.dashboardId}>
+            {d.name}
+          </option>
+        ))}
+      </select>
+      <a
+        href={selected?.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="w-full flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg text-white text-sm font-medium hover:opacity-90"
+        style={{ background: theme.colors.primary }}
+      >
+        <ExternalLink className="w-4 h-4" />
+        Lark で開く
+      </a>
+    </div>
   );
 }
 

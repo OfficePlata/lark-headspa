@@ -2374,6 +2374,27 @@ app.post("/platform/tenants/:id/users", async (c) => {
 });
 
 // ============================================================
+// Lark BASE ダッシュボード一覧 (CRMから外部リンクで開く)
+// ============================================================
+app.get("/lark/dashboards", async (c) => {
+  const auth = await requireAuthWithLark(c);
+  if (!auth.ok) return auth.response;
+  const { client } = auth.ctx;
+
+  try {
+    const items = await client.listDashboards();
+    const result = items.map((d) => ({
+      dashboardId: d.dashboard_id,
+      name: d.name,
+      url: client.buildDashboardUrl(d.dashboard_id),
+    }));
+    return c.json(ok({ items: result }));
+  } catch (e: any) {
+    return c.json(err(ERROR_CODES.LARK_API_ERROR, e.message || "Lark API エラー"), 502);
+  }
+});
+
+// ============================================================
 // 自分のアカウント (Phase B-2 補強)
 // ============================================================
 

@@ -323,6 +323,16 @@ export const api = {
       unwrap(requestWithEnvelope<{ items: SalesAnalytics[] }>("/analytics")),
   },
 
+  // ── Lark BASE ダッシュボード一覧 (CRM ホームから外部リンクで開く) ──
+  larkDashboards: {
+    list: () =>
+      unwrap(
+        requestWithEnvelope<{
+          items: Array<{ dashboardId: string; name: string; url: string }>;
+        }>("/lark/dashboards")
+      ),
+  },
+
   // ── 自分のアカウント ──
   me: {
     changePassword: (currentPassword: string, newPassword: string) =>
