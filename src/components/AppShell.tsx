@@ -9,6 +9,7 @@ import { Link, useLocation } from "wouter";
 import { toast } from "sonner";
 import {
   ClipboardList,
+  Home,
   KeyRound,
   LogOut,
   Settings,
@@ -145,6 +146,9 @@ function Header({
         </Link>
 
         <nav className="hidden sm:flex items-center gap-1 text-sm">
+          <NavLink href="/dashboard" active={activeNav === "dashboard"} icon={<Home className="w-4 h-4" />}>
+            ダッシュボード
+          </NavLink>
           <NavLink href="/customers" active={activeNav === "customers"} icon={<Users className="w-4 h-4" />}>
             顧客台帳
           </NavLink>
