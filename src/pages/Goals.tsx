@@ -42,15 +42,25 @@ export default function Goals() {
   const currentYear = String(now.getFullYear());
   const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // 現年度の年間目標 (なければ最新)
-  const currentYearly = useMemo(() => {
-    return (
+  // 表示する年度の手動選択 (null なら自動)
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState<string | null>(null);
+
+  // 現年度がデータにあればそれを優先、なければ最新 (sort desc 済) の先頭
+  const autoFiscalYear = useMemo(() => {
+    const exact =
       yearly.find((y) => y.fiscalYear === currentYear) ||
-      yearly.find((y) => y.fiscalYear.startsWith(currentYear)) ||
-      yearly[0] ||
-      null
-    );
+      yearly.find((y) => y.fiscalYear.startsWith(currentYear));
+    if (exact) return exact.fiscalYear;
+    return yearly[0]?.fiscalYear ?? null;
   }, [yearly, currentYear]);
+
+  const effectiveFiscalYear = selectedFiscalYear ?? autoFiscalYear;
+  const hasCurrentYearData = !!yearly.find((y) => y.fiscalYear === currentYear);
+
+  const currentYearly = useMemo(
+    () => yearly.find((y) => y.fiscalYear === effectiveFiscalYear) ?? null,
+    [yearly, effectiveFiscalYear]
+  );
 
   // 当月の月間目標
   const currentMonthly = useMemo(
@@ -114,6 +124,16 @@ export default function Goals() {
           </div>
         </div>
 
+        {!loading && !error && yearly.length > 0 && (
+          <FiscalYearSelector
+            items={yearly}
+            value={effectiveFiscalYear}
+            currentYear={currentYear}
+            hasCurrentYearData={hasCurrentYearData}
+            onChange={setSelectedFiscalYear}
+          />
+        )}
+
         {loading ? (
           <CenteredCard>読み込み中…</CenteredCard>
         ) : error ? (
@@ -133,6 +153,59 @@ export default function Goals() {
         )}
       </div>
     </AppShell>
+  );
+}
+
+// ── 年度セレクター + 現在年度未設定の警告 ──
+function FiscalYearSelector({
+  items,
+  value,
+  currentYear,
+  hasCurrentYearData,
+  onChange,
+}: {
+  items: YearlyGoal[];
+  value: string | null;
+  currentYear: string;
+  hasCurrentYearData: boolean;
+  onChange: (year: string | null) => void;
+}) {
+  return (
+    <section
+      className="bg-white rounded-2xl border p-4 flex flex-wrap items-center gap-3 justify-between"
+      style={{ borderColor: "var(--theme-border)" }}
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-slate-500">表示中の年度</span>
+        <select
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value || null)}
+          className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white"
+        >
+          {items.map((y) => (
+            <option key={y.fiscalYear} value={y.fiscalYear}>
+              {y.fiscalYear} 年度
+              {y.fiscalYear === currentYear ? "(今年)" : ""}
+            </option>
+          ))}
+        </select>
+        {value && value !== currentYear && (
+          <button
+            type="button"
+            onClick={() => onChange(null)}
+            className="text-xs text-slate-500 hover:text-slate-900 underline"
+          >
+            自動選択に戻す
+          </button>
+        )}
+      </div>
+
+      {!hasCurrentYearData && (
+        <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+          {currentYear} 年度の年間目標がまだ登録されていないため、別の年度を表示しています。
+        </div>
+      )}
+    </section>
   );
 }
 
