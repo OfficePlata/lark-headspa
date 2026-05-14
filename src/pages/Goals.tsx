@@ -42,28 +42,44 @@ export default function Goals() {
   const currentYear = String(now.getFullYear());
   const currentYearMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-  // 表示する年度の手動選択 (null なら自動)
-  const [selectedFiscalYear, setSelectedFiscalYear] = useState<string | null>(null);
-
   // 年度文字列から数字4桁を抽出 ("2026年" / "2026年度" / "2026" すべて → "2026")
   const extractYear = (s: string): string => {
     const m = s.match(/(\d{4})/);
     return m ? m[1] : s;
   };
 
-  // 現年度がデータにあればそれを優先、なければ最新 (sort desc 済) の先頭
-  const autoFiscalYear = useMemo(() => {
-    const exact = yearly.find((y) => extractYear(y.fiscalYear) === currentYear);
-    if (exact) return exact.fiscalYear;
-    return yearly[0]?.fiscalYear ?? null;
-  }, [yearly, currentYear]);
+  // 表示する年度の手動選択 (4桁数字。null なら自動)
+  const [selectedYear4, setSelectedYear4] = useState<string | null>(null);
 
-  const effectiveFiscalYear = selectedFiscalYear ?? autoFiscalYear;
-  const hasCurrentYearData = !!yearly.find((y) => extractYear(y.fiscalYear) === currentYear);
+  // 年度4桁で重複排除した一覧 (新しい順)
+  //   同じ "2026年" レコードが複数あっても 1 つにまとめる。
+  //   それぞれの代表レコードを sample として保持。
+  const uniqueYears = useMemo(() => {
+    const map = new Map<string, YearlyGoal>();
+    for (const y of yearly) {
+      const k = extractYear(y.fiscalYear);
+      if (!map.has(k)) map.set(k, y);
+    }
+    return Array.from(map.entries())
+      .map(([year4, sample]) => ({ year4, sample }))
+      .sort((a, b) => (a.year4 < b.year4 ? 1 : a.year4 > b.year4 ? -1 : 0));
+  }, [yearly]);
+
+  // 現年度がデータにあればそれを優先、なければ最新 (sort desc 済) の先頭
+  const autoYear4 = useMemo(() => {
+    if (uniqueYears.find((u) => u.year4 === currentYear)) return currentYear;
+    return uniqueYears[0]?.year4 ?? null;
+  }, [uniqueYears, currentYear]);
+
+  const effectiveYear4 = selectedYear4 ?? autoYear4;
+  const hasCurrentYearData = !!uniqueYears.find((u) => u.year4 === currentYear);
 
   const currentYearly = useMemo(
-    () => yearly.find((y) => y.fiscalYear === effectiveFiscalYear) ?? null,
-    [yearly, effectiveFiscalYear]
+    () =>
+      effectiveYear4
+        ? yearly.find((y) => extractYear(y.fiscalYear) === effectiveYear4) ?? null
+        : null,
+    [yearly, effectiveYear4]
   );
 
   // 当月の月間目標
@@ -128,13 +144,16 @@ export default function Goals() {
           </div>
         </div>
 
-        {!loading && !error && yearly.length > 0 && (
+        {!loading && !error && uniqueYears.length > 0 && (
           <FiscalYearSelector
-            items={yearly}
-            value={effectiveFiscalYear}
+            options={uniqueYears.map((u) => ({
+              year4: u.year4,
+              label: u.sample.fiscalYear,
+            }))}
+            value={effectiveYear4}
             currentYear={currentYear}
             hasCurrentYearData={hasCurrentYearData}
-            onChange={setSelectedFiscalYear}
+            onChange={setSelectedYear4}
           />
         )}
 
@@ -161,18 +180,20 @@ export default function Goals() {
 }
 
 // ── 年度セレクター + 現在年度未設定の警告 ──
+//   options: 年度4桁でユニーク化したリスト (重複レコード問題対策)
+//   value: 選択中の年度4桁 ("2026" など)
 function FiscalYearSelector({
-  items,
+  options,
   value,
   currentYear,
   hasCurrentYearData,
   onChange,
 }: {
-  items: YearlyGoal[];
+  options: Array<{ year4: string; label: string }>;
   value: string | null;
   currentYear: string;
   hasCurrentYearData: boolean;
-  onChange: (year: string | null) => void;
+  onChange: (year4: string | null) => void;
 }) {
   return (
     <section
@@ -186,10 +207,10 @@ function FiscalYearSelector({
           onChange={(e) => onChange(e.target.value || null)}
           className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white"
         >
-          {items.map((y) => (
-            <option key={y.fiscalYear} value={y.fiscalYear}>
-              {y.fiscalYear} 年度
-              {y.fiscalYear === currentYear ? "(今年)" : ""}
+          {options.map((o) => (
+            <option key={o.year4} value={o.year4}>
+              {o.label}
+              {o.year4 === currentYear ? "(今年)" : ""}
             </option>
           ))}
         </select>
