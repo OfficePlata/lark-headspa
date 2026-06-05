@@ -242,8 +242,12 @@ export class LarkClient {
 
   /** Bitable dashboard URL を組み立てる (Lark Web で開ける) */
   buildDashboardUrl(blockId: string): string {
-    // Lark の dashboard は from=dashboard クエリで該当ダッシュボードを開く挙動
-    return `https://${this.domain.replace(/^open\./, "www.")}/base/${this.appToken}?from=dashboard&dashboard_id=${encodeURIComponent(blockId)}`;
+    // Lark Bitable はタブ（ダッシュボード含む）の選択を `table` クエリで決める。
+    // `dashboard_id` だけだと対象タブが選択されず既定のダッシュボードに
+    // フォールバックしてしまうため、`table` にも同じ block_id を渡して
+    // 対象ダッシュボードを明示的に開く（Lark の「ダッシュボード共有」URL と同形式）。
+    const id = encodeURIComponent(blockId);
+    return `https://${this.domain.replace(/^open\./, "www.")}/base/${this.appToken}?dashboard_id=${id}&table=${id}`;
   }
 
   // ── テーブル一覧 ──
